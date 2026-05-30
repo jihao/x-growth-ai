@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 
+from backend.analysis.data_status import DailyStatus, collect_data_status
 from backend.report.daily_review import DailyReviewConfig, generate_daily_review
 from backend.report.weekly_review import WeeklyReviewConfig, generate_weekly_review
 
@@ -44,6 +45,10 @@ def main() -> None:
     weekly.add_argument("--end", required=True, help="End date, YYYY-MM-DD.")
     weekly.add_argument("--output", default=None, help="Output markdown path.")
 
+    status = subparsers.add_parser("data-status", help="Inspect local daily data availability.")
+    status.add_argument("--start", required=True, help="Start date, YYYY-MM-DD.")
+    status.add_argument("--end", required=True, help="End date, YYYY-MM-DD.")
+
     args = parser.parse_args()
 
     if args.command == "daily-review":
@@ -74,6 +79,15 @@ def main() -> None:
             )
         )
         print(output)
+        return
+
+    if args.command == "data-status":
+        rows = collect_data_status(
+            repo_root=Path.cwd().parent if Path.cwd().name == "backend" else Path.cwd(),
+            start=date.fromisoformat(args.start),
+            end=date.fromisoformat(args.end),
+        )
+        print(_format_data_status(rows))
         return
 
     parser.print_help()
@@ -116,6 +130,74 @@ def _format_backfill_results(results: list[BackfillResult]) -> str:
     failed = sum(1 for result in results if result.status == "failed")
     lines.append(f"Total: {len(results)} days, {ok} ok, {skipped} skipped, {failed} failed")
     return "\n".join(lines)
+
+
+def _format_data_status(rows: list[DailyStatus]) -> str:
+    headers = ["日期", "指数", "宽度", "板块", "涨幅榜", "成交榜", "状态", "备注"]
+    table = ["\t".join(headers)]
+
+    for row in rows:
+        if row.status == "skipped_weekend":
+            table.append("\t".join([row.day.isoformat(), "-", "-", "-", "-", "-", "跳过", "周末"]))
+            continue
+
+        cells = {dataset.name: _dataset_status_label(dataset.status, dataset.row_count) for dataset in row.datasets}
+        table.append(
+            "\t".join(
+                [
+                    row.day.isoformat(),
+                    cells.get("index_snapshot", "-"),
+                    cells.get("market_breadth", "-"),
+                    cells.get("sector_top_gainers", "-"),
+                    cells.get("stock_top_gainers", "-"),
+                    cells.get("stock_top_turnover", "-"),
+                    _daily_status_label(row.status),
+                    "；".join(row.notes) if row.notes else "-",
+                ]
+            )
+        )
+
+    summary = _data_status_summary(rows)
+    table.append("")
+    table.append(summary)
+    return "\n".join(table)
+
+
+def _dataset_status_label(status: str, row_count: int) -> str:
+    if status == "ok":
+        return f"OK({row_count})"
+    if status == "cache":
+        return f"缓存({row_count})"
+    if status == "failed":
+        return "失败"
+    if status == "missing":
+        return "缺失"
+    return status
+
+
+def _daily_status_label(status: str) -> str:
+    labels = {
+        "complete": "完整",
+        "usable_with_cache": "可用-含缓存",
+        "partial": "部分可用",
+        "unusable": "不可用",
+        "missing": "缺失",
+        "skipped_weekend": "跳过",
+    }
+    return labels.get(status, status)
+
+
+def _data_status_summary(rows: list[DailyStatus]) -> str:
+    trading_rows = [row for row in rows if row.status != "skipped_weekend"]
+    complete = sum(1 for row in trading_rows if row.status == "complete")
+    cache = sum(1 for row in trading_rows if row.status == "usable_with_cache")
+    partial = sum(1 for row in trading_rows if row.status == "partial")
+    missing = sum(1 for row in trading_rows if row.status in {"missing", "unusable"})
+    skipped = sum(1 for row in rows if row.status == "skipped_weekend")
+    return (
+        f"合计：{len(trading_rows)} 个工作日，{complete} 完整，{cache} 可用-含缓存，"
+        f"{partial} 部分可用，{missing} 缺失/不可用，{skipped} 周末跳过"
+    )
 
 
 if __name__ == "__main__":
