@@ -1,0 +1,24 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "A-share research backend and markdown report generator"
+readme = "README.md"
+authors = [
+    { name = "SuperHao", email = "jacky.jihao@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "adata>=2.9.5",
+    "akshare>=1.18.64",
+    "efinance>=0.5.8",
+    "httpx>=0.28.1",
+    "pandas>=3.0.3",
+    "pysnowball>=0.1.8",
+]
+
+[project.scripts]
+x-growth-backend = "backend.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.9.24,<0.10.0"]
+build-backend = "uv_build"
