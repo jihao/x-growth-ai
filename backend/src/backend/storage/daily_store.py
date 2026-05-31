@@ -63,6 +63,10 @@ class DailyDataStore:
     def save_failure(self, name: str, *, source: str, error: str | None) -> None:
         self.records.append(DatasetRecord(name=name, ok=False, source=source, error=error or "unknown error"))
 
+    def save_cached_dataset(self, name: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        self.save_dataset(name, rows, source="local-cache")
+        return rows
+
     def save_summary(self, name: str, payload: dict[str, Any]) -> None:
         path = self.normalized_dir / f"{name}.json"
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")

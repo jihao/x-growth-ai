@@ -46,6 +46,17 @@ class MxStocksScreenerClient:
             artifact_name=f"mx_stocks_screener_{review_date}_sector_top_gainers",
         )
 
+    def watchlist_snapshot(self, review_date: str, stocks: list[dict[str, Any]]) -> MxScreenerResult:
+        names = "、".join(str(stock.get("name") or stock.get("code")) for stock in stocks)
+        return self._run(
+            query=(
+                f"在{review_date}的{names}，包含代码、名称、收盘价、涨跌幅、成交额、"
+                "换手率、市盈率TTM、市净率、所属行业"
+            ),
+            select_type="A股",
+            artifact_name=f"mx_stocks_screener_{review_date}_watchlist_snapshot",
+        )
+
     def _run(self, query: str, select_type: str, artifact_name: str) -> MxScreenerResult:
         if not self.script.exists():
             return MxScreenerResult(False, [], error=f"Skill script not found: {self.script}")
@@ -73,6 +84,28 @@ class MxStocksScreenerClient:
         return MxScreenerResult(True, rows, csv_path=csv_path, description_path=description_path)
 
 
+def normalize_watchlist_rows(rows: list[dict[str, Any]], review_date: str) -> list[dict[str, Any]]:
+    date_key = review_date.replace("-", ".")
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        normalized.append(
+            {
+                "date": review_date,
+                "code": _text(row.get("代码")),
+                "name": _text(row.get("名称") or row.get("股票简称")),
+                "industry": _industry(row),
+                "price": _number(_find_by_prefix(row, f"收盘价(日线不复权)(元) {date_key}") or _find_by_prefix(row, f"最新价(元) {date_key}")),
+                "change_pct": _number(_find_by_prefix(row, f"涨跌幅(%) {date_key}")),
+                "amount_wan": _amount_to_wan(_find_by_prefix(row, f"成交额(元) {date_key}")),
+                "turnover_pct": _number(_find_by_prefix(row, f"换手率(%) {date_key}")),
+                "pe_ttm": _number(_find_by_prefix(row, f"市盈率(TTM)(倍) {date_key}")),
+                "pb": _number(_find_by_prefix(row, f"市净率(倍) {date_key}")),
+                "concepts": _text(row.get("概念")),
+            }
+        )
+    return normalized
+
+
 def _extract_path(output: str, label: str) -> Path | None:
     match = re.search(rf"^{label}:\s*(.+)$", output, flags=re.MULTILINE)
     if not match:
@@ -90,3 +123,51 @@ def _promote_artifacts(csv_path: Path, description_path: Path | None, artifact_n
         shutil.copy2(description_path, target_description)
 
     return target_csv, target_description
+
+
+def _find_by_prefix(row: dict[str, Any], prefix: str) -> Any:
+    for key, value in row.items():
+        if str(key).startswith(prefix):
+            return value
+    return None
+
+
+def _text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _number(value: Any) -> float | None:
+    text = _text(value)
+    if not text or text == "-":
+        return None
+    try:
+        return float(text.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _amount_to_wan(value: Any) -> float | None:
+    text = _text(value).replace(",", "")
+    if not text or text == "-":
+        return None
+    multiplier = 1.0
+    if text.endswith("万"):
+        text = text[:-1]
+        multiplier = 1.0
+    elif text.endswith("亿"):
+        text = text[:-1]
+        multiplier = 10000.0
+    elif text.endswith("元"):
+        text = text[:-1]
+        multiplier = 0.0001
+    try:
+        return float(text) * multiplier
+    except ValueError:
+        return None
+
+
+def _industry(row: dict[str, Any]) -> str:
+    value = _text(row.get("申万行业分类") or row.get("东财行业总分类"))
+    return value.split("-")[-1] if value else ""

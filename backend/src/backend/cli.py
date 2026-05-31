@@ -7,6 +7,7 @@ from pathlib import Path
 
 from backend.analysis.data_status import DailyStatus, collect_data_status
 from backend.report.daily_review import DailyReviewConfig, generate_daily_review
+from backend.report.watchlist import WatchlistConfig, generate_watchlist_snapshot
 from backend.report.weekly_review import WeeklyReviewConfig, generate_weekly_review
 
 
@@ -28,7 +29,12 @@ def main() -> None:
     daily.add_argument(
         "--no-live-data",
         action="store_true",
-        help="Skip FinClaw live data attempts and generate the analysis template only.",
+        help="Skip live data attempts and generate from valid local daily data when available.",
+    )
+    daily.add_argument(
+        "--refresh-data",
+        action="store_true",
+        help="Ignore valid local daily data and force fresh mx skill requests.",
     )
 
     backfill = subparsers.add_parser("backfill", help="Generate daily reviews for a date range.")
@@ -49,6 +55,21 @@ def main() -> None:
     status.add_argument("--start", required=True, help="Start date, YYYY-MM-DD.")
     status.add_argument("--end", required=True, help="End date, YYYY-MM-DD.")
 
+    watchlist = subparsers.add_parser("watchlist-snapshot", help="Generate a watchlist snapshot markdown report.")
+    watchlist.add_argument("--date", default=None, help="Snapshot date, YYYY-MM-DD. Defaults to last weekday.")
+    watchlist.add_argument("--config", default=None, help="Watchlist JSON config path.")
+    watchlist.add_argument("--output", default=None, help="Output markdown path.")
+    watchlist.add_argument(
+        "--no-live-data",
+        action="store_true",
+        help="Skip live data attempts and generate from valid local watchlist data when available.",
+    )
+    watchlist.add_argument(
+        "--refresh-data",
+        action="store_true",
+        help="Ignore valid local watchlist data and force fresh external requests.",
+    )
+
     args = parser.parse_args()
 
     if args.command == "daily-review":
@@ -56,6 +77,7 @@ def main() -> None:
             review_date=args.date,
             output_path=Path(args.output) if args.output else None,
             use_live_data=not args.no_live_data,
+            force_refresh=args.refresh_data,
         )
         output = generate_daily_review(config)
         print(output)
@@ -88,6 +110,19 @@ def main() -> None:
             end=date.fromisoformat(args.end),
         )
         print(_format_data_status(rows))
+        return
+
+    if args.command == "watchlist-snapshot":
+        output = generate_watchlist_snapshot(
+            WatchlistConfig(
+                snapshot_date=args.date,
+                config_path=Path(args.config) if args.config else None,
+                output_path=Path(args.output) if args.output else None,
+                use_live_data=not args.no_live_data,
+                force_refresh=args.refresh_data,
+            )
+        )
+        print(output)
         return
 
     parser.print_help()
