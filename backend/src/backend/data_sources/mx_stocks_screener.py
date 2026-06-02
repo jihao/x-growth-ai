@@ -23,7 +23,7 @@ class MxStocksScreenerClient:
     """Run the copied mx-stocks-screener skill script and parse CSV output."""
 
     def __init__(self, repo_root: Path) -> None:
-        self.script = repo_root / "skills" / "mx-skills" / "mx-stocks-screener" / "scripts" / "get_data.py"
+        self.script = repo_root / ".skills" / "mx-skills" / "mx-stocks-screener" / "scripts" / "get_data.py"
 
     def top_gainers(self, review_date: str, limit: int = 20) -> MxScreenerResult:
         return self._run(

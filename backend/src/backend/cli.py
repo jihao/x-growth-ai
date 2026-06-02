@@ -7,6 +7,7 @@ from pathlib import Path
 
 from backend.analysis.data_status import DailyStatus, collect_data_status
 from backend.report.daily_review import DailyReviewConfig, generate_daily_review
+from backend.report.stock_screen import StockScreenConfig, generate_stock_screen
 from backend.report.watchlist import WatchlistConfig, generate_watchlist_snapshot
 from backend.report.weekly_review import WeeklyReviewConfig, generate_weekly_review
 
@@ -70,6 +71,16 @@ def main() -> None:
         help="Ignore valid local watchlist data and force fresh external requests.",
     )
 
+    screen = subparsers.add_parser("stock-screen", help="Generate a rule-based stock screen report from local daily data.")
+    screen.add_argument("--date", default=None, help="Screen date, YYYY-MM-DD. Defaults to last weekday.")
+    screen.add_argument("--output", default=None, help="Output markdown path.")
+    screen.add_argument("--limit", type=int, default=15, help="Maximum number of candidates.")
+    screen.add_argument(
+        "--with-hotspot",
+        action="store_true",
+        help="Fetch mx hotspot/search skill results and add hotspot confirmation to the stock screen report.",
+    )
+
     args = parser.parse_args()
 
     if args.command == "daily-review":
@@ -120,6 +131,18 @@ def main() -> None:
                 output_path=Path(args.output) if args.output else None,
                 use_live_data=not args.no_live_data,
                 force_refresh=args.refresh_data,
+            )
+        )
+        print(output)
+        return
+
+    if args.command == "stock-screen":
+        output = generate_stock_screen(
+            StockScreenConfig(
+                screen_date=args.date,
+                output_path=Path(args.output) if args.output else None,
+                limit=args.limit,
+                with_hotspot=args.with_hotspot,
             )
         )
         print(output)

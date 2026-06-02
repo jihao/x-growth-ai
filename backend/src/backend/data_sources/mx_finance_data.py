@@ -24,7 +24,7 @@ class MxFinanceDataClient:
     """Run the copied mx-finance-data skill script and parse its xlsx output."""
 
     def __init__(self, repo_root: Path) -> None:
-        self.script = repo_root / "skills" / "mx-skills" / "mx-finance-data" / "scripts" / "get_data.py"
+        self.script = repo_root / ".skills" / "mx-skills" / "mx-finance-data" / "scripts" / "get_data.py"
 
     def query_index_snapshot(self, review_date: str) -> MxFinanceDataResult:
         query = (

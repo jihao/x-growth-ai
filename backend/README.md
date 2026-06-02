@@ -34,12 +34,12 @@ command summary.
 
 ## Data sources
 
-- Index snapshot: `skills/mx-skills/mx-finance-data/scripts/get_data.py`
-- Market breadth: `skills/mx-skills/mx-finance-data/scripts/get_data.py`
-- Stock/sector screens: `skills/mx-skills/mx-stocks-screener/scripts/get_data.py`
-- K-line wrapper: `skills/FinClaw/cn-stock-data/scripts/cn_stock_data.py`
+- Index snapshot: `.skills/mx-skills/mx-finance-data/scripts/get_data.py`
+- Market breadth: `.skills/mx-skills/mx-finance-data/scripts/get_data.py`
+- Stock/sector screens: `.skills/mx-skills/mx-stocks-screener/scripts/get_data.py`
+- K-line wrapper: `.skills/FinClaw/cn-stock-data/scripts/cn_stock_data.py`
 
-The backend does not fetch market data directly. It calls scripts from `skills/`
+The backend does not fetch market data directly. It calls scripts from `.skills/`
 and only parses their generated artifacts into the Markdown report. If the local
 proxy or network cannot reach the skill's upstream service, the command still
 writes a complete report template and records the data gap in the final section.

@@ -19,7 +19,7 @@ class FinClawClient:
     """Thin wrapper around the copied FinClaw cn-stock-data CLI."""
 
     def __init__(self, repo_root: Path) -> None:
-        self.script = repo_root / "skills" / "FinClaw" / "cn-stock-data" / "scripts" / "cn_stock_data.py"
+        self.script = repo_root / ".skills" / "FinClaw" / "cn-stock-data" / "scripts" / "cn_stock_data.py"
 
     def kline(self, code: str, start: str, end: str | None = None, count: int = 0) -> FinClawResult:
         args = ["kline", "--code", code, "--freq", "daily", "--start", start]

@@ -377,6 +377,6 @@ def _fmt_pct_text(value: Any) -> str:
 def _find_repo_root() -> Path:
     current = Path(__file__).resolve()
     for parent in current.parents:
-        if (parent / "skills").exists() and (parent / "参考资料").exists():
+        if (parent / ".skills").exists() and (parent / "参考资料").exists():
             return parent
     return current.parents[4]

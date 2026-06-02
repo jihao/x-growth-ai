@@ -74,12 +74,12 @@ def generate_daily_review(config: DailyReviewConfig) -> Path:
             store.save_dataset(
                 "index_snapshot",
                 index_rows,
-                source="skills/mx-skills/mx-finance-data",
+                source=".skills/mx-skills/mx-finance-data",
                 raw_paths=[index_result.xlsx_path, index_result.description_path],
             )
         else:
             data_notes.append(f"mx-finance-data 指数数据获取失败：{_compact_error(index_result.error)}")
-            store.save_failure("index_snapshot", source="skills/mx-skills/mx-finance-data", error=index_result.error)
+            store.save_failure("index_snapshot", source=".skills/mx-skills/mx-finance-data", error=index_result.error)
 
         breadth_result = finance_client.query_market_breadth(review_date_str)
         if breadth_result.ok:
@@ -87,12 +87,12 @@ def generate_daily_review(config: DailyReviewConfig) -> Path:
             store.save_dataset(
                 "market_breadth",
                 breadth_rows,
-                source="skills/mx-skills/mx-finance-data",
+                source=".skills/mx-skills/mx-finance-data",
                 raw_paths=[breadth_result.xlsx_path, breadth_result.description_path],
             )
         else:
             data_notes.append(f"mx-finance-data 市场宽度获取失败：{_compact_error(breadth_result.error)}")
-            store.save_failure("market_breadth", source="skills/mx-skills/mx-finance-data", error=breadth_result.error)
+            store.save_failure("market_breadth", source=".skills/mx-skills/mx-finance-data", error=breadth_result.error)
 
         screener_client = MxStocksScreenerClient(repo_root)
         sector_result = screener_client.top_sectors(review_date_str)
@@ -101,12 +101,12 @@ def generate_daily_review(config: DailyReviewConfig) -> Path:
             store.save_dataset(
                 "sector_top_gainers",
                 sector_rows,
-                source="skills/mx-skills/mx-stocks-screener",
+                source=".skills/mx-skills/mx-stocks-screener",
                 raw_paths=[sector_result.csv_path, sector_result.description_path],
             )
         else:
             data_notes.append(f"mx-stocks-screener 板块轮动获取失败：{_compact_error(sector_result.error)}")
-            store.save_failure("sector_top_gainers", source="skills/mx-skills/mx-stocks-screener", error=sector_result.error)
+            store.save_failure("sector_top_gainers", source=".skills/mx-skills/mx-stocks-screener", error=sector_result.error)
 
         gainer_result = screener_client.top_gainers(review_date_str)
         if gainer_result.ok:
@@ -114,12 +114,12 @@ def generate_daily_review(config: DailyReviewConfig) -> Path:
             store.save_dataset(
                 "stock_top_gainers",
                 top_gainer_rows,
-                source="skills/mx-skills/mx-stocks-screener",
+                source=".skills/mx-skills/mx-stocks-screener",
                 raw_paths=[gainer_result.csv_path, gainer_result.description_path],
             )
         else:
             data_notes.append(f"mx-stocks-screener 涨幅榜获取失败：{_compact_error(gainer_result.error)}")
-            store.save_failure("stock_top_gainers", source="skills/mx-skills/mx-stocks-screener", error=gainer_result.error)
+            store.save_failure("stock_top_gainers", source=".skills/mx-skills/mx-stocks-screener", error=gainer_result.error)
 
         turnover_result = screener_client.top_turnover(review_date_str)
         if turnover_result.ok:
@@ -127,12 +127,12 @@ def generate_daily_review(config: DailyReviewConfig) -> Path:
             store.save_dataset(
                 "stock_top_turnover",
                 top_turnover_rows,
-                source="skills/mx-skills/mx-stocks-screener",
+                source=".skills/mx-skills/mx-stocks-screener",
                 raw_paths=[turnover_result.csv_path, turnover_result.description_path],
             )
         else:
             data_notes.append(f"mx-stocks-screener 成交额榜获取失败：{_compact_error(turnover_result.error)}")
-            store.save_failure("stock_top_turnover", source="skills/mx-skills/mx-stocks-screener", error=turnover_result.error)
+            store.save_failure("stock_top_turnover", source=".skills/mx-skills/mx-stocks-screener", error=turnover_result.error)
     else:
         data_notes.append("已按参数跳过实时数据获取。")
         if cache_inputs:
@@ -1285,7 +1285,7 @@ def _parse_review_date(value: str | None) -> date:
 def _find_repo_root() -> Path:
     current = Path(__file__).resolve()
     for parent in current.parents:
-        if (parent / "skills").exists() and (parent / "参考资料").exists():
+        if (parent / ".skills").exists() and (parent / "参考资料").exists():
             return parent
     return current.parents[4]
 
