@@ -1,0 +1,70 @@
+{
+  "candidate_limit": 15,
+  "precheck_days": 5,
+  "screen": {
+    "turnover_scan_limit": 80,
+    "min_score": 45,
+    "top_turnover_rank": 10,
+    "mid_turnover_rank": 30,
+    "low_turnover_rank": 50,
+    "warm_change_min_pct": 1,
+    "warm_change_max_pct": 6,
+    "high_change_max_pct": 9,
+    "overheat_change_pct": 9,
+    "negative_change_penalty_pct": 0,
+    "healthy_turnover_min_pct": 2,
+    "healthy_turnover_max_pct": 8,
+    "high_turnover_pct": 12,
+    "active_volume_ratio": 1.2
+  },
+  "precheck": {
+    "overheat_change_pct": 15,
+    "overheat_consecutive_up_days": 4,
+    "latest_overheat_change_pct": 9,
+    "strong_trend_change_pct": 8,
+    "strong_amount_change_pct": 50,
+    "warm_amount_change_pct": 20
+  },
+  "grouping": {
+    "data_strong_score": 80,
+    "main_core_score": 90,
+    "main_core_turnover_rank": 20,
+    "low_rebound_today_change_pct": 1,
+    "trend_pre_change_pct": 3
+  },
+  "action_review": {
+    "focus_confirm_rank": 30,
+    "focus_invalid_rank": 50,
+    "focus_invalid_change_pct": -3,
+    "confirm_rank": 50,
+    "confirm_change_pct": 1,
+    "confirm_volume_ratio": 1.2,
+    "confirm_invalid_rank": 80,
+    "confirm_invalid_change_pct": -4,
+    "no_chase_confirm_min_change_pct": -3,
+    "no_chase_confirm_max_change_pct": 3,
+    "no_chase_confirm_rank": 60,
+    "no_chase_invalid_up_pct": 7,
+    "no_chase_invalid_down_pct": -5,
+    "avoid_chase_confirm_change_pct": 0,
+    "avoid_chase_confirm_rank": 30,
+    "avoid_chase_invalid_change_pct": 5,
+    "avoid_chase_invalid_rank": 20,
+    "fallback_confirm_rank": 60,
+    "fallback_invalid_rank": 80,
+    "fallback_invalid_change_pct": -4
+  },
+  "action_plan": {
+    "focus_keep_rank": 30,
+    "focus_invalid_rank": 50,
+    "confirm_keep_rank": 50,
+    "fallback_invalid_rank": 80
+  },
+  "mainline": {
+    "lookback_days": 3,
+    "top_sector_count": 8,
+    "continuation_overlap_count": 2,
+    "high_concentration_ratio": 0.5,
+    "candidate_core_group_min_hits": 3
+  }
+}

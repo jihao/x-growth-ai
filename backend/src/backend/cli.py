@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from backend.analysis.data_status import DailyStatus, collect_data_status
+from backend.backtest.technical import TechnicalBacktestConfig, generate_technical_backtest
 from backend.report.daily_review import DailyReviewConfig, generate_daily_review
 from backend.report.stock_screen import StockScreenConfig, generate_stock_screen
 from backend.report.watchlist import WatchlistConfig, generate_watchlist_snapshot
@@ -74,12 +75,23 @@ def main() -> None:
     screen = subparsers.add_parser("stock-screen", help="Generate a rule-based stock screen report from local daily data.")
     screen.add_argument("--date", default=None, help="Screen date, YYYY-MM-DD. Defaults to last weekday.")
     screen.add_argument("--output", default=None, help="Output markdown path.")
-    screen.add_argument("--limit", type=int, default=15, help="Maximum number of candidates.")
+    screen.add_argument("--limit", type=int, default=None, help="Maximum number of candidates. Defaults to stock_screen_rules.json.")
     screen.add_argument(
         "--with-hotspot",
         action="store_true",
         help="Fetch mx hotspot/search skill results and add hotspot confirmation to the stock screen report.",
     )
+
+    tech = subparsers.add_parser("tech-backtest", help="Backtest MACD/KDJ/RSI strategies on BaoStock daily K-lines.")
+    tech.add_argument("--start", default=None, help="Start date, YYYY-MM-DD. Defaults to one year before --end.")
+    tech.add_argument("--end", default=None, help="End date, YYYY-MM-DD. Defaults to today.")
+    tech.add_argument("--codes", default=None, help="Comma-separated stock codes. Defaults to backend/config/watchlist.json.")
+    tech.add_argument("--strategies", default=None, help="Comma-separated strategies: macd,kdj,rsi. Defaults to all.")
+    tech.add_argument("--output", default=None, help="Output markdown path.")
+    tech.add_argument("--initial-cash", type=float, default=100000.0, help="Initial cash per stock/strategy.")
+    tech.add_argument("--commission-rate", type=float, default=0.0003, help="Commission rate, e.g. 0.0003 for 0.03%.")
+    tech.add_argument("--min-commission", type=float, default=5.0, help="Minimum commission per order.")
+    tech.add_argument("--stamp-tax-rate", type=float, default=0.0005, help="Sell-side stamp tax rate.")
 
     args = parser.parse_args()
 
@@ -143,6 +155,23 @@ def main() -> None:
                 output_path=Path(args.output) if args.output else None,
                 limit=args.limit,
                 with_hotspot=args.with_hotspot,
+            )
+        )
+        print(output)
+        return
+
+    if args.command == "tech-backtest":
+        output = generate_technical_backtest(
+            TechnicalBacktestConfig(
+                start_date=args.start,
+                end_date=args.end,
+                codes=_split_csv_arg(args.codes),
+                strategies=_split_csv_arg(args.strategies),
+                output_path=Path(args.output) if args.output else None,
+                initial_cash=args.initial_cash,
+                commission_rate=args.commission_rate,
+                min_commission=args.min_commission,
+                stamp_tax_rate=args.stamp_tax_rate,
             )
         )
         print(output)
@@ -219,6 +248,12 @@ def _format_data_status(rows: list[DailyStatus]) -> str:
     table.append("")
     table.append(summary)
     return "\n".join(table)
+
+
+def _split_csv_arg(value: str | None) -> list[str] | None:
+    if not value:
+        return None
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def _dataset_status_label(status: str, row_count: int) -> str:
