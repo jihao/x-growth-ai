@@ -11,8 +11,7 @@ import {
   Target
 } from "lucide-react";
 import type { ReactNode } from "react";
-import type { Page } from "../appTypes";
-import { pageTitle } from "./AppSections";
+import { pageTitle, type Page } from "../appTypes";
 
 const navItems: Array<{ id: Page; label: string; icon: typeof Home }> = [
   { id: "home", label: "首页", icon: Home },

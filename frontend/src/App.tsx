@@ -10,9 +10,7 @@ import {
   ReportsPage,
   ScreenPage,
   StockPage,
-  StrategyPage,
-  loadReviewNotes,
-  sleep
+  StrategyPage
 } from "./components/AppSections";
 import type {
   BacktestJob,
@@ -27,6 +25,8 @@ import type {
   StockStrategyDetail,
   StrategySummary
 } from "./types";
+import { sleep } from "./utils/async";
+import { loadReviewNotes } from "./utils/reviewStorage";
 
 export function App() {
   const [page, setPage] = useState<Page>("home");

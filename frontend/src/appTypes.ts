@@ -16,3 +16,16 @@ export type ReviewNote = {
   risk: string;
   updatedAt: string;
 };
+
+export function pageTitle(page: Page): string {
+  return {
+    home: "首页",
+    screen: "选股看板",
+    stock: "个股分析",
+    strategy: "策略验证",
+    concentration: "集中度趋势",
+    reports: "日报区域",
+    learning: "学习区域",
+    data: "数据区域"
+  }[page];
+}
