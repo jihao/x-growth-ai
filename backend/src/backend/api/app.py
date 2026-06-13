@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.agent_tools import TOOL_NAMES, run_tool, tool_definitions
 from backend.api import services
 
 
@@ -10,7 +11,7 @@ app = FastAPI(title="X-Growth AI", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -20,6 +21,29 @@ app.add_middleware(
 @app.get("/api/health")
 def health() -> dict:
     return services.health_status()
+
+
+@app.get("/api/agent/tools")
+def agent_tools() -> dict:
+    return {"count": len(TOOL_NAMES), "tools": tool_definitions()}
+
+
+@app.post("/api/agent/tools/{tool_name}/run")
+def run_agent_tool(tool_name: str, arguments: dict | None = None) -> dict:
+    result = run_tool(tool_name, arguments or {})
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result)
+    return result
+
+
+@app.get("/api/agent/model-config")
+def agent_model_config() -> dict:
+    return services.get_agent_model_config()
+
+
+@app.put("/api/agent/model-config")
+def update_agent_model_config(payload: dict) -> dict:
+    return services.save_agent_model_config(payload)
 
 
 @app.get("/api/market/overview")
@@ -52,7 +76,9 @@ def stock_indicators(code: str, start: str | None = None, end: str | None = None
 
 
 @app.get("/api/screen/candidates")
-def screen_candidates(date: str | None = None, limit: int = Query(50, ge=1, le=200)) -> dict:
+def screen_candidates(date: str | None = None, limit: int = Query(50, ge=1, le=200), refresh: bool = False) -> dict:
+    if refresh:
+        return services.screen_candidate_cache_refresh(date, limit)
     return services.screen_candidates(date, limit)
 
 
@@ -95,6 +121,15 @@ def learning_detail(learning_id: str) -> dict:
 @app.get("/api/strategies/backtests")
 def strategy_backtests() -> dict:
     return services.strategy_backtests()
+
+
+@app.get("/api/strategies/candidate-rolling-backtest")
+def candidate_rolling_backtest(
+    lookback: int = Query(90, ge=20, le=160),
+    limit: int = Query(30, ge=5, le=100),
+    refresh: bool = False,
+) -> dict:
+    return services.candidate_rolling_backtest(lookback=lookback, limit=limit, refresh=refresh)
 
 
 @app.get("/api/strategies/backtests/{code}")

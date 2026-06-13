@@ -4,6 +4,7 @@ import {
   BookOpen,
   Database,
   FileText,
+  History,
   Home,
   LineChart,
   PieChart,
@@ -20,6 +21,7 @@ const navItems: Array<{ id: Page; label: string; icon: typeof Home }> = [
   { id: "strategy", label: "策略", icon: BarChart3 },
   { id: "concentration", label: "集中度", icon: PieChart },
   { id: "reports", label: "日报", icon: FileText },
+  { id: "history", label: "历史", icon: History },
   { id: "learning", label: "学习", icon: BookOpen },
   { id: "data", label: "数据", icon: Database }
 ];

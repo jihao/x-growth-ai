@@ -6,6 +6,7 @@ import {
   ConcentrationPage,
   DataPage,
   HomePage,
+  HistoryReportsPage,
   LearningPage,
   ReportsPage,
   ScreenPage,
@@ -19,9 +20,12 @@ import type {
   ConcentrationResponse,
   Health,
   IndicatorResponse,
+  KlinePatternResponse,
   LearningItem,
   MarketOverview,
   ReportItem,
+  StockAgentBrief,
+  StrategySearchResponse,
   StockStrategyDetail,
   StrategySummary
 } from "./types";
@@ -35,6 +39,10 @@ export function App() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [selected, setSelected] = useState<Candidate | null>(null);
   const [indicators, setIndicators] = useState<IndicatorResponse | null>(null);
+  const [patterns, setPatterns] = useState<KlinePatternResponse | null>(null);
+  const [matchedStrategies, setMatchedStrategies] = useState<StrategySearchResponse | null>(null);
+  const [agentBrief, setAgentBrief] = useState<StockAgentBrief | null>(null);
+  const [agentBriefLoading, setAgentBriefLoading] = useState(false);
   const [stockStrategies, setStockStrategies] = useState<StockStrategyDetail | null>(null);
   const [backtestJob, setBacktestJob] = useState<BacktestJob | null>(null);
   const [reports, setReports] = useState<ReportItem[]>([]);
@@ -96,7 +104,29 @@ export function App() {
     if (!selected) return;
     let cancelled = false;
     const current = selected;
+    setPatterns(null);
+    setMatchedStrategies(null);
+    setAgentBrief(null);
+    setAgentBriefLoading(true);
     api.indicators(current.code).then(setIndicators).catch((err) => setError(err.message));
+    api.klinePatterns(current.code)
+      .then((payload) => {
+        if (!cancelled) setPatterns(payload.result);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "K线形态加载失败"));
+    api.searchStrategyKnowledge(strategyQueryForCandidate(current), 3)
+      .then((payload) => {
+        if (!cancelled) setMatchedStrategies(payload.result);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "战法匹配加载失败"));
+    api.stockAgentBrief(current.code)
+      .then((payload) => {
+        if (!cancelled) setAgentBrief(payload.result);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "AI操作建议加载失败"))
+      .finally(() => {
+        if (!cancelled) setAgentBriefLoading(false);
+      });
     async function loadStrategyWithAutoRun() {
       try {
         setBacktestJob(null);
@@ -173,14 +203,18 @@ export function App() {
       {page === "stock" && (
         <StockPage
           selected={selected}
+          agentBrief={agentBrief}
+          agentBriefLoading={agentBriefLoading}
           indicators={indicators}
+          patterns={patterns}
+          matchedStrategies={matchedStrategies}
           strategyDetail={stockStrategies}
           backtestJob={backtestJob}
           reviewNote={selected ? reviewNotes[selected.code] : undefined}
           onSaveReview={saveReviewNote}
         />
       )}
-      {page === "strategy" && <StrategyPage strategies={strategies} selected={selected} strategyDetail={stockStrategies} />}
+      {page === "strategy" && <StrategyPage strategies={strategies} selected={selected} matchedStrategies={matchedStrategies} />}
       {page === "concentration" && (
         <ConcentrationPage
           candidates={candidates}
@@ -191,8 +225,21 @@ export function App() {
         />
       )}
       {page === "reports" && <ReportsPage reports={reports} />}
+      {page === "history" && <HistoryReportsPage reports={reports} />}
       {page === "learning" && <LearningPage learning={learning} />}
       {page === "data" && <DataPage health={health} overview={overview} />}
     </AppShell>
   );
+}
+
+function strategyQueryForCandidate(candidate: Candidate): string {
+  return [
+    candidate.group,
+    candidate.action_hint,
+    candidate.macd_status,
+    candidate.kdj_status,
+    candidate.rsi14 !== null && candidate.rsi14 !== undefined ? `RSI${candidate.rsi14.toFixed(1)}` : "",
+    ...(candidate.reasons ?? []),
+    ...(candidate.risks ?? [])
+  ].filter(Boolean).join(" ");
 }

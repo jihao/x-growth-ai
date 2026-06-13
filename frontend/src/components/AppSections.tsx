@@ -37,15 +37,21 @@ import {
 import type {
   BacktestJob,
   Candidate,
+  CandidateRollingBacktest,
   ConcentrationResponse,
   ConcentrationRow,
   DailyReviewDashboard,
   Health,
   IndicatorResponse,
+  KlinePatternResponse,
   LearningItem,
   MarkdownDetail,
   MarketOverview,
   ReportItem,
+  StockAgentBrief,
+  AgentModelConfig,
+  StrategyKnowledgeItem,
+  StrategySearchResponse,
   StockStrategyDetail,
   StrategySummary
 } from "../types";
@@ -189,14 +195,22 @@ function ReviewQueue({
 
 export function StockPage({
   selected,
+  agentBrief,
+  agentBriefLoading,
   indicators,
+  patterns,
+  matchedStrategies,
   strategyDetail,
   backtestJob,
   reviewNote,
   onSaveReview
 }: {
   selected: Candidate | null;
+  agentBrief: StockAgentBrief | null;
+  agentBriefLoading: boolean;
   indicators: IndicatorResponse | null;
+  patterns: KlinePatternResponse | null;
+  matchedStrategies: StrategySearchResponse | null;
   strategyDetail: StockStrategyDetail | null;
   backtestJob: BacktestJob | null;
   reviewNote?: ReviewNote;
@@ -209,7 +223,13 @@ export function StockPage({
   const decision = stockDecision(selected, indicators?.analysis, activeSummary, activeTechnical);
   return (
     <section className="stock-workspace">
-      <StockDecisionCard selected={selected} analysis={indicators?.analysis} strategyDetail={strategyDetail} activeStrategy={activeTechnical} decision={decision} />
+      {agentBriefLoading ? (
+        <StockAgentBriefLoading />
+      ) : agentBrief ? (
+        <StockAgentBriefCard brief={agentBrief} />
+      ) : (
+        <StockDecisionCard selected={selected} analysis={indicators?.analysis} strategyDetail={strategyDetail} activeStrategy={activeTechnical} decision={decision} />
+      )}
       <ReviewJournal candidate={selected} decision={decision} note={reviewNote} onSave={onSaveReview} />
       <section className="panel quote-panel">
         <div className="stock-header">
@@ -235,6 +255,10 @@ export function StockPage({
           <StrategyForStock detail={strategyDetail} job={backtestJob} activeStrategy={activeTechnical} setActiveStrategy={setActiveTechnical} />
         </section>
       </div>
+      <div className="stock-agent-insights">
+        <KlinePatternPanel patterns={patterns} />
+        <MatchedStrategyPanel payload={matchedStrategies} selected={selected} patterns={patterns} />
+      </div>
       <CandidateDetail candidate={selected} />
       <StockTechnicalAssist analysis={indicators?.analysis} />
     </section>
@@ -244,23 +268,50 @@ export function StockPage({
 export function StrategyPage({
   strategies,
   selected,
-  strategyDetail
+  matchedStrategies
 }: {
   strategies: StrategySummary[];
   selected: Candidate | null;
-  strategyDetail: StockStrategyDetail | null;
+  matchedStrategies: StrategySearchResponse | null;
 }) {
   const filtered = selected ? strategies.filter((row) => String(row.code).padStart(6, "0") === selected.code) : strategies;
+  const [rolling, setRolling] = useState<CandidateRollingBacktest | null>(null);
+  const [rollingError, setRollingError] = useState<string | null>(null);
+  const [rollingLoading, setRollingLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setRollingLoading(true);
+    setRollingError(null);
+    api.candidateRollingBacktest(60, 20)
+      .then((payload) => {
+        if (!cancelled) setRolling(payload);
+      })
+      .catch((error) => {
+        if (!cancelled) setRollingError(error instanceof Error ? error.message : "候选池滚动回测加载失败");
+      })
+      .finally(() => {
+        if (!cancelled) setRollingLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   return (
     <section className="grid-page">
+      <StrategyKnowledgePanel selected={selected} matchedStrategies={matchedStrategies} />
+      <section className="panel span-2">
+        <PanelTitle icon={Target} title="候选池滚动回测" />
+        <p className="note">公平口径：T 日只使用当时 DB 候选池，T+1 开盘交易；最多 5 只、单票 20%、止损和 MA20 风控。用于验证“每天照系统候选做”大概会怎样。</p>
+        {rollingLoading && <div className="loading inline">正在生成候选池滚动回测...</div>}
+        {rollingError && <div className="alert">{rollingError}</div>}
+        {rolling && <CandidateRollingBacktestPanel payload={rolling} />}
+      </section>
       <section className="panel span-2">
         <PanelTitle icon={BarChart3} title={selected ? `${selected.name}(${selected.code}) 策略表现` : "策略表现"} />
         <p className="note">总览里的买入持有按完整回测区间计算；个股卡片里的首买持有按当前策略第一笔实际买入价计算。</p>
         <StrategySummaryTable rows={filtered.slice(0, 80)} />
-      </section>
-      <section className="panel">
-        <PanelTitle icon={Activity} title="买卖明细" />
-        <TradeList detail={strategyDetail} strategy="all" />
       </section>
     </section>
   );
@@ -308,6 +359,74 @@ function StockDecisionCard({
         </div>
       </div>
     </section>
+  );
+}
+
+function StockAgentBriefLoading() {
+  const steps = ["读取指标", "识别K线形态", "匹配短线战法", "汇总风险与触发条件"];
+  return (
+    <section className="panel agent-brief-card agent-brief-loading">
+      <PanelTitle icon={ShieldAlert} title="AI 操作建议" />
+      <div className="agent-running-banner">
+        <span className="agent-spinner" />
+        <div>
+          <strong>AI 操作建议正在运行中</strong>
+          <small>正在用本地规则引擎汇总行情、形态、战法和回测结果。</small>
+        </div>
+      </div>
+      <div className="agent-running-steps">
+        {steps.map((step) => <span key={step}>{step}</span>)}
+      </div>
+      <div className="agent-skeleton-grid">
+        <i /><i /><i />
+      </div>
+    </section>
+  );
+}
+
+function StockAgentBriefCard({ brief }: { brief: StockAgentBrief }) {
+  return (
+    <section className="panel agent-brief-card">
+      <PanelTitle icon={ShieldAlert} title="AI 操作建议" />
+      <div className={`agent-brief-banner ${brief.tone}`}>
+        <div>
+          <strong>{brief.status}</strong>
+          <span>{brief.action}</span>
+        </div>
+        <em>{brief.position_sizing}</em>
+      </div>
+      <p className="agent-brief-summary">{brief.summary}</p>
+      <div className="agent-evidence-grid">
+        {brief.evidence.slice(0, 6).map((item) => (
+          <div key={`${item.label}-${item.value}`} className={`agent-evidence ${item.tone}`}>
+            <small>{item.label}</small>
+            <strong>{formatBriefText(item.value)}</strong>
+            <span>{formatBriefText(item.hint)}</span>
+          </div>
+        ))}
+      </div>
+      <div className="agent-brief-columns">
+        <AgentBriefList title="支持理由" rows={brief.supporting_reasons} />
+        <AgentBriefList title="主要风险" rows={brief.risk_factors} />
+        <AgentBriefList title="下一步等什么" rows={brief.next_steps} />
+        <AgentBriefList title="失效条件" rows={brief.invalidation} />
+      </div>
+      <div className="agent-source-line">
+        <span>查询词：{brief.strategy_query || "-"}</span>
+        <span>工具：{brief.source_tools.join(" / ")}</span>
+      </div>
+    </section>
+  );
+}
+
+function AgentBriefList({ title, rows }: { title: string; rows: string[] }) {
+  return (
+    <div>
+      <strong>{title}</strong>
+      <ul>
+        {(rows.length ? rows : ["暂无明确结论。"]).slice(0, 4).map((row) => <li key={row}>{formatBriefText(row)}</li>)}
+      </ul>
+    </div>
   );
 }
 
@@ -431,6 +550,302 @@ function StockTechnicalAssist({ analysis }: { analysis?: IndicatorResponse["anal
           : "当前不在 5/8/13/21/34/55/89 日附近的时间窗口。"}
       </p>
     </section>
+  );
+}
+
+function KlinePatternPanel({ patterns }: { patterns: KlinePatternResponse | null }) {
+  const items = patterns?.patterns ?? [];
+  return (
+    <section className="panel pattern-panel">
+      <PanelTitle icon={Activity} title="近期K线形态" />
+      {!patterns && <EmptyState text="正在等待形态识别结果。" />}
+      {patterns && (
+        <>
+          <div className={`pattern-summary ${patterns.summary.bias}`}>
+            <strong>{patternBiasLabel(patterns.summary.bias)}</strong>
+            <span>{patterns.summary.message}</span>
+          </div>
+          {items.length ? (
+            <div className="pattern-list">
+              {items.slice(0, 6).map((item) => (
+                <div className={`pattern-item ${item.type}`} key={`${item.name}-${item.date ?? ""}-${item.description}`}>
+                  <div>
+                    <strong>{item.name}</strong>
+                    <span>{item.date ?? "最近K线"} / 置信度 {pct(item.confidence * 100)}</span>
+                  </div>
+                  <p>{item.description}</p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <EmptyState text="未识别到典型K线形态。" />
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function MatchedStrategyPanel({
+  payload,
+  selected,
+  patterns
+}: {
+  payload: StrategySearchResponse | null;
+  selected: Candidate;
+  patterns: KlinePatternResponse | null;
+}) {
+  const rows = payload?.results ?? [];
+  return (
+    <section className="panel matched-strategy-panel">
+      <PanelTitle icon={BookOpen} title="匹配短线战法" />
+      {!payload && <EmptyState text="正在根据候选理由匹配战法。" />}
+      {payload && !rows.length && <EmptyState text="暂无匹配战法。" />}
+      {!!rows.length && (
+        <div className="strategy-card-list">
+          {rows.map((item) => (
+            <StrategyKnowledgeCard key={item.filename} item={item} compact actionPlan={strategyActionPlan(selected, patterns, item)} />
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function StrategyKnowledgePanel({
+  selected,
+  matchedStrategies
+}: {
+  selected: Candidate | null;
+  matchedStrategies: StrategySearchResponse | null;
+}) {
+  const [query, setQuery] = useState(selected ? `${selected.group} ${selected.action_hint}` : "放量突破 MA20 MACD");
+  const [results, setResults] = useState<StrategyKnowledgeItem[]>(matchedStrategies?.results ?? []);
+  const [total, setTotal] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!matchedStrategies) return;
+    setResults(matchedStrategies.results);
+  }, [matchedStrategies]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.listStrategyKnowledge()
+      .then((payload) => {
+        if (!cancelled) setTotal(payload.result.total);
+      })
+      .catch(() => {
+        if (!cancelled) setTotal(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function submitSearch() {
+    const nextQuery = query.trim();
+    if (!nextQuery) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const payload = await api.searchStrategyKnowledge(nextQuery, 6);
+      setResults(payload.result.results);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "战法搜索失败");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <section className="panel span-2 strategy-knowledge-panel">
+      <div className="panel-heading">
+        <PanelTitle icon={BookOpen} title="短线战法库" />
+        <span className="panel-note">{total === null ? "40个内置战法" : `${total}个内置战法`}</span>
+      </div>
+      <div className="strategy-search">
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") submitSearch();
+          }}
+          placeholder="输入场景，例如：超跌低吸 RSI 背离、分歧转一致、放量突破"
+        />
+        <button className="small-button" onClick={submitSearch} disabled={loading}>
+          <Search size={14} /> 搜索战法
+        </button>
+      </div>
+      {selected && <p className="note">当前个股：{selected.name}({selected.code})，可把候选理由、形态信号和技术指标组合成搜索词。</p>}
+      {loading && <div className="loading inline">正在搜索战法库...</div>}
+      {error && <div className="alert">{error}</div>}
+      <div className="strategy-card-grid">
+        {results.length ? results.map((item) => <StrategyKnowledgeCard key={item.filename} item={item} />) : <EmptyState text="输入关键词后搜索战法。" />}
+      </div>
+    </section>
+  );
+}
+
+function StrategyKnowledgeCard({
+  item,
+  compact = false,
+  actionPlan
+}: {
+  item: StrategyKnowledgeItem;
+  compact?: boolean;
+  actionPlan?: ReturnType<typeof strategyActionPlan>;
+}) {
+  const match = strategyMatchLabel(item.score);
+  const terms = item.matched_terms?.slice(0, 4) ?? [];
+  return (
+    <article className="strategy-knowledge-card">
+      <div className="strategy-card-heading">
+        <strong>{item.title}</strong>
+        {typeof item.score === "number" && (
+          <span className={`strategy-match-badge ${match.tone}`} title="这是战法库关键词检索的原始排序分，不是100分制，也不是买卖评分。当前没有固定最大值，输入关键词越多、命中标题/适用场景/核心条件越多，分数可能越高；更适合同一次搜索结果之间横向比较。">
+            {match.label} · {formatNum(item.score)}分
+          </span>
+        )}
+      </div>
+      <p>{item.excerpt}</p>
+      {!!terms.length && <small className="matched-terms">命中：{terms.join("、")}</small>}
+      {actionPlan && (
+        <div className={`strategy-action-plan ${actionPlan.tone}`}>
+          <strong>{actionPlan.status}</strong>
+          <span>{actionPlan.summary}</span>
+          <ul>
+            {actionPlan.nextSteps.map((step) => <li key={step}>{step}</li>)}
+          </ul>
+        </div>
+      )}
+      {!compact && (
+        <div className="strategy-section-list">
+          <StrategyMiniSection title="核心条件" rows={item.key_conditions ?? []} />
+          <StrategyMiniSection title="买入信号" rows={item.buy_signals ?? []} />
+          <StrategyMiniSection title="风险提示" rows={item.risk_notes ?? []} />
+        </div>
+      )}
+      {compact && !!item.key_conditions?.length && <small>{item.key_conditions.slice(0, 2).join("；")}</small>}
+    </article>
+  );
+}
+
+function StrategyMiniSection({ title, rows }: { title: string; rows: string[] }) {
+  if (!rows.length) return null;
+  return (
+    <div>
+      <span>{title}</span>
+      <ul>
+        {rows.slice(0, 3).map((row) => <li key={row}>{row}</li>)}
+      </ul>
+    </div>
+  );
+}
+
+function strategyMatchLabel(score?: number): { label: string; tone: "high" | "medium" | "low" } {
+  if (score === undefined) return { label: "已匹配", tone: "medium" };
+  if (score >= 10) return { label: "高匹配", tone: "high" };
+  if (score >= 5) return { label: "中匹配", tone: "medium" };
+  return { label: "弱匹配", tone: "low" };
+}
+
+function strategyActionPlan(candidate: Candidate, patterns: KlinePatternResponse | null, item: StrategyKnowledgeItem) {
+  const patternBias = patterns?.summary.bias ?? "none";
+  const hasBearishPattern = patternBias === "bearish";
+  const hasBullishPattern = patternBias === "bullish";
+  const highRisk = candidate.action_hint.includes("回踩") || candidate.action_hint.includes("风险") || candidate.risks.some((risk) => /高|风险|过热|顶|回撤/.test(risk));
+  const strongCandidate = candidate.action_hint.includes("重点") || candidate.score >= 85;
+  const buySignals = item.buy_signals?.slice(0, 2) ?? [];
+  const riskNotes = item.risk_notes?.slice(0, 1) ?? [];
+
+  if (hasBearishPattern || highRisk) {
+    return {
+      tone: "defensive" as const,
+      status: "未形成买入信号",
+      summary: "当前只是战法场景相似，但K线/风险条件不支持直接进场，先把它当作观察清单。",
+      nextSteps: [
+        buySignals[0] ? `等待触发：${buySignals[0]}` : "等待放量转强、回踩不破或趋势重新确认。",
+        riskNotes[0] ? `失效条件：${riskNotes[0]}` : "若继续放量下跌或跌破关键支撑，放弃本次战法假设。"
+      ],
+    };
+  }
+
+  if (strongCandidate && hasBullishPattern) {
+    return {
+      tone: "active" as const,
+      status: "接近观察买点",
+      summary: "候选评分、形态和战法方向相对配合，但仍需要等具体买入触发条件出现。",
+      nextSteps: [
+        buySignals[0] ? `买入触发：${buySignals[0]}` : "买入触发：突破/回踩确认后再考虑。",
+        riskNotes[0] ? `风控：${riskNotes[0]}` : "风控：跌破触发位或关键均线时撤销假设。"
+      ],
+    };
+  }
+
+  return {
+    tone: "watch" as const,
+    status: "等待确认",
+    summary: "当前匹配的是战法环境，不等于已经出现买点。下一步重点看触发条件是否出现。",
+    nextSteps: [
+      buySignals[0] ? `等待触发：${buySignals[0]}` : "等待价格、成交量和技术指标形成同向确认。",
+      buySignals[1] ? `备选触发：${buySignals[1]}` : "若只匹配场景但没有触发，继续观察不操作。"
+    ],
+  };
+}
+
+function CandidateRollingBacktestPanel({ payload }: { payload: CandidateRollingBacktest }) {
+  if (payload.status !== "ok") return <EmptyState text={payload.description ?? "暂无候选池滚动回测结果。"} />;
+  const summary = payload.summary ?? {};
+  const recentTrades = payload.trades.slice(-8).reverse();
+  const parameters = payload.parameters ?? {};
+  return (
+    <div className="rolling-backtest">
+      <div className="metric-row tight">
+        <Metric label="组合收益" value={pct(summary.total_return_pct)} />
+        <Metric label="年化收益" value={pct(summary.annual_return_pct)} />
+        <Metric label="最大回撤" value={pct(summary.max_drawdown_pct)} />
+        <Metric label="最终权益" value={`${formatNum((summary.final_equity ?? 0) / 10000)}万`} />
+      </div>
+      <div className="metric-row tight">
+        <Metric label="交易次数" value={summary.trade_count ?? 0} />
+        <Metric label="胜率" value={pct(summary.win_rate_pct)} />
+        <Metric label="当前持仓" value={summary.open_positions ?? 0} />
+        <Metric label="信号天数" value={summary.candidate_days ?? 0} />
+      </div>
+      <div className="strategy-rules">
+        <span>区间 {payload.start_date ?? "-"} 至 {payload.end_date ?? "-"}</span>
+        <span>入场：{parameters.entry_rule ?? "候选评分 + 风险过滤"}</span>
+        <span>执行：{parameters.execution ?? "T+1 开盘成交"}</span>
+        <span>风控：止损 {parameters.stop_loss_pct ?? "-"}%，最多持仓 {parameters.max_holding_days ?? "-"} 天</span>
+      </div>
+      <div className="table-wrap compact-table">
+        <table>
+          <thead>
+            <tr>
+              <th>股票</th>
+              <th>买入</th>
+              <th>卖出/状态</th>
+              <th>收益</th>
+              <th>原因</th>
+            </tr>
+          </thead>
+          <tbody>
+            {recentTrades.map((trade, index) => (
+              <tr key={`${trade.code}-${trade.entry_date}-${index}`}>
+                <td>{trade.name}({trade.code})</td>
+                <td>{trade.entry_date ?? "-"} / {formatNum(trade.entry_price)}</td>
+                <td>{trade.exit_date ?? trade.status ?? "-"} / {formatNum(trade.exit_price)}</td>
+                <td className={(trade.return_pct ?? 0) >= 0 ? "positive" : "negative"}>{pct(trade.return_pct)}</td>
+                <td>{trade.exit_reason ?? trade.entry_reason ?? "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="note">这个结果更接近“每天按系统候选执行”的组合验证；第一版暂未模拟涨跌停无法成交和滑点，所以只能作为学习/复盘参考。</p>
+    </div>
   );
 }
 
@@ -836,9 +1251,6 @@ export function ReportsPage({ reports }: { reports: ReportItem[] }) {
   const [review, setReview] = useState<DailyReviewDashboard | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
   const [reviewError, setReviewError] = useState<string | null>(null);
-  const [selectedId, setSelectedId] = useState<string | null>(reports[0]?.id ?? null);
-  const [detail, setDetail] = useState<MarkdownDetail | null>(null);
-  const [error, setError] = useState<string | null>(null);
 
   async function loadReview(force = false, targetDate = reviewDate) {
     setReviewLoading(true);
@@ -865,11 +1277,6 @@ export function ReportsPage({ reports }: { reports: ReportItem[] }) {
     }
   }
 
-  useEffect(() => {
-    if (!selectedId) return;
-    api.report(selectedId).then(setDetail).catch((err) => setError(err.message));
-  }, [selectedId]);
-
   return (
     <section className="daily-review-page">
       <section className="panel review-control-panel">
@@ -887,30 +1294,39 @@ export function ReportsPage({ reports }: { reports: ReportItem[] }) {
         {reviewLoading && <div className="loading">正在准备复盘日报...</div>}
         {reviewError && <div className="alert">{reviewError}</div>}
         {review && <DataCompleteness review={review} />}
-        <h3>历史 Markdown</h3>
-        <div className="report-grid compact">
-          {reports.slice(0, 12).map((item) => (
-            <button className={`report-item ${selectedId === item.id ? "active" : ""}`} key={item.id} onClick={() => setSelectedId(item.id)}>
-              <span>{item.type}</span>
-              <strong>{item.title}</strong>
-              <small>{item.id}</small>
-            </button>
-          ))}
-        </div>
       </section>
       <DailyReviewView review={review} />
-      <section className="panel reader-panel daily-markdown-panel">
-        {error && <div className="alert">{error}</div>}
-        {detail ? (
-          <>
-            <PanelTitle icon={FileText} title={detail.title} />
-            <MarkdownView content={detail.content} />
-          </>
-        ) : (
-          <EmptyState text="选择一张历史 Markdown 查看正文。" />
-        )}
-      </section>
     </section>
+  );
+}
+
+export function HistoryReportsPage({ reports }: { reports: ReportItem[] }) {
+  const [selectedId, setSelectedId] = useState<string | null>(reports[0]?.id ?? null);
+  const [detail, setDetail] = useState<MarkdownDetail | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!selectedId && reports[0]) {
+      setSelectedId(reports[0].id);
+    }
+  }, [reports, selectedId]);
+
+  useEffect(() => {
+    if (!selectedId) return;
+    setError(null);
+    api.report(selectedId).then(setDetail).catch((err) => setError(err.message));
+  }, [selectedId]);
+
+  return (
+    <MarkdownLibrary
+      icon={FileText}
+      title="历史 Markdown"
+      items={reports.map((item) => ({ id: item.id, title: item.title, kind: item.type }))}
+      selectedId={selectedId}
+      setSelectedId={setSelectedId}
+      detail={detail}
+      error={error}
+    />
   );
 }
 
@@ -1608,6 +2024,106 @@ export function DataPage({ health, overview }: { health: Health | null; overview
         <p>最新截面：{overview?.date ?? "-"}</p>
         <p>股票数：{formatInt(overview?.stock_count)}</p>
       </section>
+      <AgentModelConfigPanel />
+    </section>
+  );
+}
+
+function AgentModelConfigPanel() {
+  const [config, setConfig] = useState<AgentModelConfig | null>(null);
+  const [mode, setMode] = useState<"rules" | "llm">("rules");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [model, setModel] = useState("");
+  const [apiKey, setApiKey] = useState("");
+  const [temperature, setTemperature] = useState(0.2);
+  const [maxTokens, setMaxTokens] = useState(1200);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.agentModelConfig().then((payload) => {
+      if (cancelled) return;
+      setConfig(payload);
+      setMode(payload.mode === "llm" ? "llm" : "rules");
+      setBaseUrl(payload.base_url ?? "");
+      setModel(payload.model ?? "");
+      setTemperature(payload.temperature ?? 0.2);
+      setMaxTokens(payload.max_tokens ?? 1200);
+    }).catch((error) => {
+      if (!cancelled) setMessage(error instanceof Error ? error.message : "模型配置读取失败");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function save() {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const payload = await api.saveAgentModelConfig({
+        mode,
+        provider: "openai-compatible",
+        base_url: baseUrl,
+        model,
+        api_key: apiKey,
+        temperature,
+        max_tokens: maxTokens,
+      });
+      setConfig(payload);
+      setApiKey("");
+      setMessage("模型配置已保存。当前AI操作建议仍使用规则引擎生成；LLM调用会在下一步接入。");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "保存失败");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <section className="panel span-2 agent-config-panel">
+      <PanelTitle icon={Database} title="AI 模型配置" />
+      <div className="model-status-line">
+        <strong>{mode === "llm" ? "OpenAI-compatible 配置" : "规则引擎模式"}</strong>
+        <span>{config?.api_key_configured ? `Key ${config.api_key_masked}` : "未配置 API Key"}</span>
+        <span>{config?.updated_at ? `更新 ${config.updated_at}` : "尚未保存配置"}</span>
+      </div>
+      <p className="note">当前个股“AI操作建议”默认由本地规则引擎汇总生成，不会调用外部模型。这里先保存兼容 OpenAI 的 endpoint、API Key 和模型名，后续可切换为 LLM 生成解释。</p>
+      <div className="agent-config-grid">
+        <label>
+          <span>运行模式</span>
+          <select value={mode} onChange={(event) => setMode(event.target.value as "rules" | "llm")}>
+            <option value="rules">规则引擎（当前启用）</option>
+            <option value="llm">OpenAI-compatible（配置预留）</option>
+          </select>
+        </label>
+        <label>
+          <span>Base URL</span>
+          <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} placeholder="https://api.openai.com/v1" />
+        </label>
+        <label>
+          <span>模型名称</span>
+          <input value={model} onChange={(event) => setModel(event.target.value)} placeholder="gpt-4.1-mini / deepseek-chat / ..." />
+        </label>
+        <label>
+          <span>API Key</span>
+          <input value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder={config?.api_key_configured ? "留空则保留当前 Key" : "sk-..."} type="password" />
+        </label>
+        <label>
+          <span>Temperature</span>
+          <input value={temperature} onChange={(event) => setTemperature(Number(event.target.value))} type="number" min="0" max="2" step="0.1" />
+        </label>
+        <label>
+          <span>Max tokens</span>
+          <input value={maxTokens} onChange={(event) => setMaxTokens(Number(event.target.value))} type="number" min="256" max="16000" step="100" />
+        </label>
+      </div>
+      <div className="review-actions">
+        <small>配置文件保存在 backend/config/agent_model.json，已加入 .gitignore。</small>
+        <button className="small-button" onClick={save} disabled={saving}>{saving ? "保存中..." : "保存模型配置"}</button>
+      </div>
+      {message && <div className="job-status ready">{message}</div>}
     </section>
   );
 }
@@ -2102,6 +2618,18 @@ function archiveStatus(value: string | undefined): string {
   if (value === "rebuilt") return "已刷新重建";
   if (value === "created") return "新建归档";
   return "未归档";
+}
+
+function patternBiasLabel(value: string): string {
+  if (value === "bullish") return "偏多形态";
+  if (value === "bearish") return "偏空形态";
+  if (value === "neutral") return "整理观察";
+  return "形态不足";
+}
+
+function formatBriefText(value: string | number): string {
+  if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toFixed(2);
+  return String(value).replace(/(-?\d+\.\d{3,})/g, (match) => Number(match).toFixed(2));
 }
 
 function stockDecision(

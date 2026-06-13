@@ -542,6 +542,64 @@ tbody tr.selected {
   margin-top: 4px;
 }
 
+.agent-config-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.model-status-line {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #e5edf6;
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px;
+}
+
+.model-status-line strong {
+  color: #172033;
+}
+
+.model-status-line span {
+  background: #ffffff;
+  border: 1px solid #dbe3ef;
+  border-radius: 999px;
+  color: #475569;
+  font-size: 12px;
+  padding: 4px 8px;
+}
+
+.agent-config-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.agent-config-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.agent-config-grid span {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.agent-config-grid input,
+.agent-config-grid select {
+  background: #f8fafc;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  color: #172033;
+  font: inherit;
+  min-width: 0;
+  padding: 9px 10px;
+  width: 100%;
+}
+
 .market-plan {
   border: 1px solid #e5edf6;
   border-radius: 8px;
@@ -627,10 +685,6 @@ tbody tr.selected {
   gap: 14px;
   position: sticky;
   top: 18px;
-}
-
-.review-control-panel h3 {
-  margin: 4px 0 0;
 }
 
 .date-control {
@@ -729,10 +783,6 @@ tbody tr.selected {
   max-width: 980px;
   padding: 26px 34px 34px;
   width: 100%;
-}
-
-.daily-markdown-panel {
-  grid-column: 1 / -1;
 }
 
 .daily-review-hero {
@@ -1452,6 +1502,247 @@ tbody tr.selected {
   gap: 14px;
 }
 
+.stock-agent-insights {
+  display: grid;
+  gap: 14px;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.stock-agent-insights .panel {
+  align-content: start;
+  min-height: 0;
+}
+
+.pattern-panel,
+.matched-strategy-panel,
+.strategy-knowledge-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.panel-note {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.pattern-summary {
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  display: grid;
+  gap: 4px;
+  padding: 10px 12px;
+}
+
+.pattern-summary strong,
+.pattern-summary span {
+  display: block;
+}
+
+.pattern-summary strong {
+  color: #172033;
+}
+
+.pattern-summary span {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.pattern-summary.bullish {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.pattern-summary.bearish {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.pattern-summary.neutral,
+.pattern-summary.none {
+  background: #f8fafc;
+}
+
+.pattern-list,
+.strategy-card-list,
+.strategy-card-grid,
+.strategy-section-list {
+  display: grid;
+  gap: 10px;
+}
+
+.pattern-item,
+.strategy-knowledge-card {
+  background: #f8fafc;
+  border: 1px solid #e5edf6;
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.pattern-item.bullish {
+  border-left: 4px solid #dc2626;
+}
+
+.pattern-item.bearish {
+  border-left: 4px solid #16a34a;
+}
+
+.pattern-item.neutral {
+  border-left: 4px solid #64748b;
+}
+
+.pattern-item strong,
+.pattern-item span,
+.pattern-item p,
+.strategy-knowledge-card strong,
+.strategy-knowledge-card span,
+.strategy-knowledge-card p,
+.strategy-knowledge-card small {
+  display: block;
+}
+
+.pattern-item strong,
+.strategy-knowledge-card strong {
+  color: #172033;
+  font-size: 14px;
+}
+
+.pattern-item span,
+.strategy-knowledge-card span,
+.strategy-knowledge-card small {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.pattern-item p,
+.strategy-knowledge-card p {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.strategy-search {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.strategy-search input {
+  background: #f8fafc;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  color: #172033;
+  font: inherit;
+  min-width: 0;
+  padding: 9px 10px;
+  width: 100%;
+}
+
+.strategy-card-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.strategy-card-heading {
+  align-items: start;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+.strategy-match-badge {
+  background: #eef2ff;
+  border-radius: 999px;
+  color: #3730a3;
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 7px;
+}
+
+.strategy-match-badge.high {
+  background: #fef2f2;
+  color: #b91c1c;
+}
+
+.strategy-match-badge.medium {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+.strategy-match-badge.low {
+  background: #f1f5f9;
+  color: #475569;
+}
+
+.matched-terms {
+  background: #ffffff;
+  border: 1px solid #e5edf6;
+  border-radius: 7px;
+  color: #475569;
+  padding: 6px 8px;
+}
+
+.strategy-action-plan {
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  padding: 9px 10px;
+}
+
+.strategy-action-plan.active {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.strategy-action-plan.watch {
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
+.strategy-action-plan.defensive {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.strategy-action-plan strong {
+  font-size: 13px;
+}
+
+.strategy-action-plan span {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.strategy-action-plan ul {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 0;
+  padding-left: 16px;
+}
+
+.strategy-section-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.strategy-section-list div {
+  min-width: 0;
+}
+
+.strategy-section-list ul {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 6px 0 0;
+  padding-left: 16px;
+}
+
 .quote-panel {
   min-height: 640px;
 }
@@ -1460,6 +1751,236 @@ tbody tr.selected {
   display: grid;
   gap: 12px;
   grid-column: 1 / -1;
+}
+
+.agent-brief-card {
+  display: grid;
+  gap: 12px;
+  grid-column: 1 / -1;
+}
+
+.agent-brief-card h2 {
+  margin-bottom: 0;
+}
+
+.agent-brief-banner {
+  align-items: center;
+  border: 1px solid #e5edf6;
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  padding: 14px;
+}
+
+.agent-brief-banner.active {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+
+.agent-brief-banner.watch {
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
+.agent-brief-banner.defensive {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+
+.agent-brief-banner.neutral {
+  background: #f8fafc;
+}
+
+.agent-brief-banner strong,
+.agent-brief-banner span {
+  display: block;
+}
+
+.agent-brief-banner strong {
+  font-size: 20px;
+}
+
+.agent-brief-banner span {
+  color: #475569;
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.agent-brief-banner em {
+  background: #ffffff;
+  border: 1px solid #dbe3ef;
+  border-radius: 999px;
+  color: #334155;
+  flex: 0 0 auto;
+  font-style: normal;
+  font-weight: 700;
+  padding: 6px 10px;
+}
+
+.agent-brief-summary {
+  color: #475569;
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.agent-evidence-grid,
+.agent-brief-columns {
+  display: grid;
+  gap: 10px;
+}
+
+.agent-evidence-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.agent-evidence {
+  background: #f8fafc;
+  border: 1px solid #e5edf6;
+  border-radius: 8px;
+  display: grid;
+  gap: 5px;
+  padding: 10px;
+}
+
+.agent-evidence.active {
+  border-left: 4px solid #dc2626;
+}
+
+.agent-evidence.watch {
+  border-left: 4px solid #f59e0b;
+}
+
+.agent-evidence.defensive {
+  border-left: 4px solid #16a34a;
+}
+
+.agent-evidence small,
+.agent-evidence span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.agent-evidence strong {
+  color: #172033;
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+
+.agent-evidence span {
+  line-height: 1.45;
+}
+
+.agent-brief-columns {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.agent-brief-columns > div {
+  background: #f8fafc;
+  border: 1px solid #e5edf6;
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+
+.agent-brief-columns strong {
+  color: #172033;
+  display: block;
+  font-size: 13px;
+  margin-bottom: 7px;
+}
+
+.agent-brief-columns ul {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.5;
+  margin: 0;
+  padding-left: 16px;
+}
+
+.agent-source-line {
+  color: #64748b;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: 10px;
+}
+
+.agent-running-banner {
+  align-items: center;
+  background: #f8fafc;
+  border: 1px solid #e5edf6;
+  border-radius: 8px;
+  display: flex;
+  gap: 12px;
+  padding: 14px;
+}
+
+.agent-running-banner strong,
+.agent-running-banner small {
+  display: block;
+}
+
+.agent-running-banner small {
+  color: #64748b;
+  margin-top: 4px;
+}
+
+.agent-spinner {
+  animation: agent-spin 0.9s linear infinite;
+  border: 3px solid #dbeafe;
+  border-top-color: #2563eb;
+  border-radius: 999px;
+  display: block;
+  flex: 0 0 auto;
+  height: 28px;
+  width: 28px;
+}
+
+.agent-running-steps {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.agent-running-steps span {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 6px 9px;
+  text-align: center;
+}
+
+.agent-skeleton-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.agent-skeleton-grid i {
+  animation: agent-pulse 1.2s ease-in-out infinite;
+  background: linear-gradient(90deg, #eef2f7, #f8fafc, #eef2f7);
+  border-radius: 8px;
+  display: block;
+  height: 72px;
+}
+
+@keyframes agent-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes agent-pulse {
+  0%,
+  100% {
+    opacity: 0.55;
+  }
+  50% {
+    opacity: 1;
+  }
 }
 
 .decision-card h2 {
@@ -1983,6 +2504,36 @@ tbody tr.selected {
   gap: 12px;
 }
 
+.rolling-backtest {
+  display: grid;
+  gap: 12px;
+}
+
+.strategy-rules {
+  background: #f8fafc;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+}
+
+.strategy-rules span {
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.compact-table table {
+  font-size: 12px;
+}
+
+.compact-table td:last-child {
+  color: #475569;
+  line-height: 1.45;
+  text-align: left;
+}
+
 .trade-list {
   display: grid;
   gap: 10px;
@@ -2096,12 +2647,22 @@ tbody tr.selected {
   .decision-points,
   .review-form-grid,
   .daily-review-hero,
-  .review-button-row {
+  .review-button-row,
+  .strategy-search,
+  .strategy-card-grid,
+  .strategy-section-list,
+  .stock-agent-insights,
+  .agent-evidence-grid,
+  .agent-brief-columns,
+  .agent-running-steps,
+  .agent-skeleton-grid,
+  .agent-config-grid {
     grid-template-columns: 1fr;
   }
 
   .review-actions,
-  .review-heading {
+  .review-heading,
+  .agent-brief-banner {
     align-items: stretch;
     flex-direction: column;
   }

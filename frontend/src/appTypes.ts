@@ -1,4 +1,4 @@
-export type Page = "home" | "screen" | "stock" | "strategy" | "concentration" | "reports" | "learning" | "data";
+export type Page = "home" | "screen" | "stock" | "strategy" | "concentration" | "reports" | "history" | "learning" | "data";
 
 export type TechnicalKey = "macd" | "kdj" | "rsi" | "td9";
 
@@ -25,6 +25,7 @@ export function pageTitle(page: Page): string {
     strategy: "策略验证",
     concentration: "集中度趋势",
     reports: "日报区域",
+    history: "历史 Markdown",
     learning: "学习区域",
     data: "数据区域"
   }[page];

@@ -31,6 +31,8 @@ from backend.report.daily_review import DailyReviewConfig, generate_daily_review
 _BACKTEST_LOCK = threading.Lock()
 _BACKTEST_JOBS: dict[str, dict[str, Any]] = {}
 REVIEW_CACHE_VERSION = 6
+AGENT_MODEL_CONFIG_VERSION = 1
+SCREEN_CANDIDATE_CACHE_VERSION = 1
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,88 @@ class ApiContext:
 def context() -> ApiContext:
     root = find_repo_root()
     return ApiContext(repo_root=root, db_path=default_db_path(root))
+
+
+def agent_model_config_path(ctx: ApiContext | None = None) -> Path:
+    ctx = ctx or context()
+    return ctx.repo_root / "backend" / "config" / "agent_model.json"
+
+
+def default_agent_model_config() -> dict[str, Any]:
+    return {
+        "version": AGENT_MODEL_CONFIG_VERSION,
+        "mode": "rules",
+        "provider": "openai-compatible",
+        "base_url": "",
+        "model": "",
+        "api_key": "",
+        "temperature": 0.2,
+        "max_tokens": 1200,
+        "updated_at": None,
+    }
+
+
+def get_agent_model_config(ctx: ApiContext | None = None, include_secret: bool = False) -> dict[str, Any]:
+    path = agent_model_config_path(ctx)
+    config = default_agent_model_config()
+    if path.exists():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                config.update(loaded)
+        except (OSError, json.JSONDecodeError):
+            pass
+    return _public_agent_model_config(config, include_secret=include_secret)
+
+
+def save_agent_model_config(payload: dict[str, Any], ctx: ApiContext | None = None) -> dict[str, Any]:
+    path = agent_model_config_path(ctx)
+    current = get_agent_model_config(ctx, include_secret=True)
+    next_config = default_agent_model_config()
+    next_config.update(current)
+    for key in ["mode", "provider", "base_url", "model", "api_key", "temperature", "max_tokens"]:
+        if key in payload:
+            if key == "api_key" and str(payload[key] or "").strip() == "":
+                continue
+            next_config[key] = payload[key]
+    next_config["mode"] = next_config["mode"] if next_config["mode"] in {"rules", "llm"} else "rules"
+    next_config["provider"] = next_config["provider"] or "openai-compatible"
+    next_config["base_url"] = str(next_config.get("base_url") or "").strip()
+    next_config["model"] = str(next_config.get("model") or "").strip()
+    next_config["api_key"] = str(next_config.get("api_key") or "").strip()
+    next_config["temperature"] = _bounded_float(next_config.get("temperature"), 0, 2, 0.2)
+    next_config["max_tokens"] = int(_bounded_float(next_config.get("max_tokens"), 256, 16000, 1200))
+    next_config["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    next_config["version"] = AGENT_MODEL_CONFIG_VERSION
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(next_config, ensure_ascii=False, indent=2), encoding="utf-8")
+    return _public_agent_model_config(next_config)
+
+
+def _public_agent_model_config(config: dict[str, Any], include_secret: bool = False) -> dict[str, Any]:
+    api_key = str(config.get("api_key") or "")
+    result = dict(config)
+    result["api_key_configured"] = bool(api_key)
+    result["api_key_masked"] = _mask_secret(api_key) if api_key else ""
+    if not include_secret:
+        result.pop("api_key", None)
+    return result
+
+
+def _mask_secret(value: str) -> str:
+    if len(value) <= 8:
+        return "••••" if value else ""
+    return f"{value[:4]}••••{value[-4:]}"
+
+
+def _bounded_float(value: Any, minimum: float, maximum: float, default: float) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    if math.isnan(parsed):
+        return default
+    return min(max(parsed, minimum), maximum)
 
 
 def health_status(ctx: ApiContext | None = None) -> dict[str, Any]:
@@ -386,11 +470,77 @@ def stock_indicators(code: str, start: str | None = None, end: str | None = None
 
 
 def screen_candidates(date: str | None = None, limit: int = 50, ctx: ApiContext | None = None) -> dict[str, Any]:
+    return _screen_candidates_cached(date=date, limit=limit, refresh=False, ctx=ctx)
+
+
+def _screen_candidates_cached(
+    date: str | None = None,
+    limit: int = 50,
+    refresh: bool = False,
+    ctx: ApiContext | None = None,
+) -> dict[str, Any]:
     ctx = ctx or context()
+    safe_limit = min(max(int(limit or 50), 1), 200)
     with connect(ctx.db_path) as conn:
         current = latest_trade_date(conn, date)
-        if current is None:
-            return {"date": None, "rows": []}
+    if current is None:
+        return {"date": None, "rows": []}
+
+    cache_path = _screen_candidate_cache_path(ctx, current, safe_limit)
+    if not refresh:
+        cached = _read_screen_candidate_cache(cache_path)
+        if cached is not None:
+            cached["cache"] = {
+                "status": "hit",
+                "path": str(cache_path),
+                "version": SCREEN_CANDIDATE_CACHE_VERSION,
+            }
+            return cached
+
+    payload = _build_screen_candidates(current, safe_limit, ctx)
+    _write_screen_candidate_cache(cache_path, payload)
+    payload["cache"] = {
+        "status": "refreshed" if refresh else "created",
+        "path": str(cache_path),
+        "version": SCREEN_CANDIDATE_CACHE_VERSION,
+    }
+    return payload
+
+
+def screen_candidate_cache_refresh(
+    date: str | None = None,
+    limit: int = 50,
+    ctx: ApiContext | None = None,
+) -> dict[str, Any]:
+    return _screen_candidates_cached(date=date, limit=limit, refresh=True, ctx=ctx)
+
+
+def _screen_candidate_cache_path(ctx: ApiContext, current: str, limit: int) -> Path:
+    display_date = display_trade_date(current)
+    return ctx.repo_root / "data" / "screen" / display_date / "normalized" / f"api_candidates_limit{limit}_v{SCREEN_CANDIDATE_CACHE_VERSION}.json"
+
+
+def _read_screen_candidate_cache(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("cache_version") != SCREEN_CANDIDATE_CACHE_VERSION:
+        return None
+    if not isinstance(payload.get("rows"), list):
+        return None
+    return payload
+
+
+def _write_screen_candidate_cache(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(_json_ready(payload), ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _build_screen_candidates(current: str, limit: int, ctx: ApiContext) -> dict[str, Any]:
+    with connect(ctx.db_path) as conn:
         dates = recent_trade_dates(conn, current, 90)
         latest_rows = conn.execute(
             """
@@ -405,7 +555,7 @@ def screen_candidates(date: str | None = None, limit: int = 50, ctx: ApiContext 
         ).fetchall()
         liquid_codes = [row["ts_code"] for row in latest_rows]
         if not dates or not liquid_codes:
-            return {"date": display_trade_date(current), "raw_date": current, "rows": []}
+            return _screen_candidate_payload(current, [])
         date_placeholders = ",".join("?" for _ in dates)
         code_placeholders = ",".join("?" for _ in liquid_codes)
         frame = pd.read_sql_query(
@@ -423,9 +573,19 @@ def screen_candidates(date: str | None = None, limit: int = 50, ctx: ApiContext 
         )
 
     if frame.empty:
-        return {"date": display_trade_date(current), "rows": []}
+        return _screen_candidate_payload(current, [])
     rows = _score_candidates(frame, current, limit)
-    return {"date": display_trade_date(current), "raw_date": current, "rows": rows}
+    return _screen_candidate_payload(current, rows)
+
+
+def _screen_candidate_payload(current: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    return {
+        "date": display_trade_date(current),
+        "raw_date": current,
+        "rows": rows,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "cache_version": SCREEN_CANDIDATE_CACHE_VERSION,
+    }
 
 
 def _stock_indicator_analysis(frame: pd.DataFrame) -> dict[str, Any]:
@@ -1434,6 +1594,63 @@ def strategy_backtests(ctx: ApiContext | None = None) -> dict[str, Any]:
     }
 
 
+def candidate_rolling_backtest(
+    lookback: int = 90,
+    limit: int = 30,
+    refresh: bool = False,
+    ctx: ApiContext | None = None,
+) -> dict[str, Any]:
+    ctx = ctx or context()
+    safe_lookback = min(max(int(lookback or 90), 20), 160)
+    safe_limit = min(max(int(limit or 30), 5), 100)
+    with connect(ctx.db_path) as conn:
+        end_raw = latest_trade_date(conn)
+        if end_raw is None:
+            return {"status": "empty", "message": "database has no daily data", "summary": {}, "trades": [], "equity": []}
+        all_dates = recent_trade_dates(conn, end_raw, safe_lookback + 90)
+    if len(all_dates) < 35:
+        return {"status": "empty", "message": "not enough trade dates for rolling backtest", "summary": {}, "trades": [], "equity": []}
+    trade_dates = all_dates[-(safe_lookback + 1):]
+    start_raw = trade_dates[0]
+    end_display = display_trade_date(end_raw)
+    start_display = display_trade_date(start_raw)
+    run_dir = ctx.repo_root / "data" / "backtests" / f"candidate_pool_rolling_{start_display}_{end_display}"
+    normalized = run_dir / "normalized"
+    payload_path = normalized / f"rolling_limit{safe_limit}.json"
+    if payload_path.exists() and not refresh:
+        try:
+            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+            payload["cache"] = {"status": "hit", "path": str(payload_path)}
+            return payload
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    payload = _generate_candidate_rolling_backtest(ctx, all_dates, trade_dates, safe_limit)
+    payload["cache"] = {"status": "rebuilt" if refresh else "created", "path": str(payload_path)}
+    normalized.mkdir(parents=True, exist_ok=True)
+    payload_path.write_text(json.dumps(_json_ready(payload), ensure_ascii=False, indent=2), encoding="utf-8")
+    (run_dir / "manifest.json").write_text(
+        json.dumps(
+            _json_ready(
+                {
+                    "generated_at": datetime.now().isoformat(timespec="seconds"),
+                    "source": "astocks_qfq.db",
+                    "method": "candidate_pool_rolling_backtest_v1",
+                    "start_date": start_display,
+                    "end_date": end_display,
+                    "lookback": len(trade_dates) - 1,
+                    "candidate_limit": safe_limit,
+                    "payload": str(payload_path),
+                }
+            ),
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    return payload
+
+
 def stock_strategy_detail(code: str, ctx: ApiContext | None = None) -> dict[str, Any]:
     ctx = ctx or context()
     display = display_code(normalize_ts_code(code))
@@ -1585,6 +1802,456 @@ def _generate_db_stock_backtest(code: str, ctx: ApiContext) -> Path:
     }
     (run_dir / "manifest.json").write_text(json.dumps(_json_ready(manifest), ensure_ascii=False, indent=2), encoding="utf-8")
     return run_dir
+
+
+def _generate_candidate_rolling_backtest(
+    ctx: ApiContext,
+    all_dates: list[str],
+    trade_dates: list[str],
+    candidate_limit: int,
+) -> dict[str, Any]:
+    start_raw = all_dates[0]
+    end_raw = trade_dates[-1]
+    placeholders = ",".join("?" for _ in all_dates)
+    signal_placeholders = ",".join("?" for _ in trade_dates[:-1])
+    with connect(ctx.db_path) as conn:
+        liquid_rows = conn.execute(
+            f"""
+            WITH ranked AS (
+                SELECT ts_code, trade_date,
+                       ROW_NUMBER() OVER (PARTITION BY trade_date ORDER BY amount DESC) AS amount_rank
+                FROM daily_qfq
+                WHERE trade_date IN ({signal_placeholders})
+                  AND amount IS NOT NULL
+                  AND amount > 0
+            )
+            SELECT DISTINCT ts_code
+            FROM ranked
+            WHERE amount_rank <= 1000
+            """,
+            trade_dates[:-1],
+        ).fetchall()
+        liquid_codes = [row["ts_code"] for row in liquid_rows]
+        if not liquid_codes:
+            return {"status": "empty", "message": "no liquid stocks in selected date range", "summary": {}, "trades": [], "equity": []}
+        code_placeholders = ",".join("?" for _ in liquid_codes)
+        frame = pd.read_sql_query(
+            f"""
+            SELECT d.ts_code, s.name, d.trade_date, d.open, d.high, d.low, d.close_qfq AS close,
+                   d.volume, d.amount
+            FROM daily_qfq d
+            LEFT JOIN stocks s ON s.ts_code = d.ts_code
+            WHERE d.trade_date IN ({placeholders})
+              AND d.ts_code IN ({code_placeholders})
+              AND d.amount IS NOT NULL
+              AND d.open IS NOT NULL
+              AND d.close_qfq IS NOT NULL
+            ORDER BY d.ts_code, d.trade_date
+            """,
+            conn,
+            params=[*all_dates, *liquid_codes],
+        )
+    if frame.empty:
+        return {"status": "empty", "message": "no rows in selected date range", "summary": {}, "trades": [], "equity": []}
+
+    features = _rolling_candidate_feature_frame(frame)
+    bar_by_key = {
+        (str(row["trade_date"]), str(row["ts_code"])): row
+        for row in features.to_dict("records")
+    }
+    candidate_by_date: dict[str, list[dict[str, Any]]] = {}
+    daily_candidates: list[dict[str, Any]] = []
+    for signal_date in trade_dates[:-1]:
+        rows = _score_candidates_from_features(features, signal_date, candidate_limit)
+        candidate_by_date[signal_date] = rows
+        daily_candidates.append(
+            {
+                "date": display_trade_date(signal_date),
+                "raw_date": signal_date,
+                "count": len(rows),
+                "top": rows[:5],
+            }
+        )
+
+    costs = BacktestCostConfig(initial_cash=1_000_000.0, commission_rate=0.0003, min_commission=5.0, stamp_tax_rate=0.0005)
+    max_positions = 5
+    max_position_pct = 0.20
+    stop_loss_pct = 8.0
+    max_holding_days = 20
+    min_score = 75
+    cash = float(costs.initial_cash)
+    positions: dict[str, dict[str, Any]] = {}
+    trades: list[dict[str, Any]] = []
+    equity_curve: list[dict[str, Any]] = []
+    entry_events = 0
+
+    for index in range(1, len(trade_dates)):
+        signal_date = trade_dates[index - 1]
+        trade_date = trade_dates[index]
+        signal_candidates = candidate_by_date.get(signal_date, [])
+        signal_map = {item["ts_code"]: item for item in signal_candidates}
+
+        for ts_code, position in list(positions.items()):
+            signal_bar = bar_by_key.get((signal_date, ts_code))
+            trade_bar = bar_by_key.get((trade_date, ts_code))
+            if not signal_bar or not trade_bar:
+                continue
+            exit_reason = _rolling_exit_reason(position, signal_bar, signal_map.get(ts_code), stop_loss_pct, max_holding_days)
+            if not exit_reason:
+                continue
+            sell = _portfolio_sell(int(position["shares"]), float(trade_bar["open"]), costs)
+            cash += sell["cash_delta"]
+            pnl = sell["cash_delta"] - float(position["entry_value"]) - float(position["entry_fee"])
+            trades.append(
+                {
+                    **position,
+                    "exit_signal_date": display_trade_date(signal_date),
+                    "exit_date": display_trade_date(trade_date),
+                    "exit_price": _safe_float(trade_bar["open"]),
+                    "exit_value": _safe_float(sell["value"]),
+                    "exit_fee": _safe_float(sell["fee"]),
+                    "stamp_tax": _safe_float(sell["tax"]),
+                    "exit_reason": exit_reason,
+                    "status": "closed",
+                    "holding_days": _date_diff_days(str(position["entry_date"]), display_trade_date(trade_date) or str(trade_date)),
+                    "pnl": _safe_float(pnl),
+                    "return_pct": _safe_float(pnl / float(position["entry_value"]) * 100 if position["entry_value"] else None),
+                }
+            )
+            del positions[ts_code]
+
+        close_equity = _portfolio_equity(cash, positions, bar_by_key, signal_date)
+        buy_budget = close_equity * max_position_pct
+        for candidate in signal_candidates:
+            if len(positions) >= max_positions:
+                break
+            ts_code = str(candidate["ts_code"])
+            if ts_code in positions or not _candidate_entry_allowed(candidate, min_score):
+                continue
+            trade_bar = bar_by_key.get((trade_date, ts_code))
+            if not trade_bar:
+                continue
+            budget = min(cash, buy_budget)
+            buy = _portfolio_buy(budget, float(trade_bar["open"]), costs)
+            if buy["shares"] <= 0:
+                continue
+            cash -= buy["cash_used"]
+            entry_events += 1
+            positions[ts_code] = {
+                "code": display_code(ts_code),
+                "ts_code": ts_code,
+                "name": candidate["name"],
+                "entry_signal_date": display_trade_date(signal_date),
+                "entry_date": display_trade_date(trade_date),
+                "entry_price": _safe_float(trade_bar["open"]),
+                "shares": int(buy["shares"]),
+                "entry_value": _safe_float(buy["value"]),
+                "entry_fee": _safe_float(buy["fee"]),
+                "entry_reason": f"{candidate['group']} / 评分 {candidate['score']} / {candidate['action_hint']}",
+                "entry_score": candidate["score"],
+                "entry_group": candidate["group"],
+            }
+
+        day_equity = _portfolio_equity(cash, positions, bar_by_key, trade_date)
+        equity_curve.append(
+            {
+                "date": display_trade_date(trade_date),
+                "raw_date": trade_date,
+                "cash": _safe_float(cash),
+                "market_value": _safe_float(day_equity - cash),
+                "equity": _safe_float(day_equity),
+                "positions": len(positions),
+            }
+        )
+
+    final_raw = trade_dates[-1]
+    for position in positions.values():
+        bar = bar_by_key.get((final_raw, str(position["ts_code"])))
+        if not bar:
+            continue
+        market_value = int(position["shares"]) * float(bar["close"])
+        pnl = market_value - float(position["entry_value"]) - float(position["entry_fee"])
+        trades.append(
+            {
+                **position,
+                "exit_signal_date": None,
+                "exit_date": None,
+                "exit_price": _safe_float(bar["close"]),
+                "exit_value": _safe_float(market_value),
+                "exit_fee": None,
+                "stamp_tax": None,
+                "exit_reason": "期末持仓按收盘价估值",
+                "status": "open",
+                "holding_days": _date_diff_days(str(position["entry_date"]), display_trade_date(final_raw) or str(final_raw)),
+                "pnl": _safe_float(pnl),
+                "return_pct": _safe_float(pnl / float(position["entry_value"]) * 100 if position["entry_value"] else None),
+            }
+        )
+
+    summary = _rolling_summary(equity_curve, trades, costs.initial_cash)
+    return _json_ready(
+        {
+            "status": "ok",
+            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "method": "candidate_pool_rolling_v1",
+            "description": "每日用当时可见的 DB 候选池生成信号，T+1 开盘交易；带单票仓位、持仓数、止损、MA20 和最长持仓风控。",
+            "start_date": display_trade_date(trade_dates[0]),
+            "end_date": display_trade_date(trade_dates[-1]),
+            "raw_start_date": start_raw,
+            "raw_end_date": end_raw,
+            "parameters": {
+                "initial_cash": costs.initial_cash,
+                "candidate_limit": candidate_limit,
+                "min_score": min_score,
+                "max_positions": max_positions,
+                "max_position_pct": max_position_pct * 100,
+                "stop_loss_pct": stop_loss_pct,
+                "max_holding_days": max_holding_days,
+                "entry_rule": "候选评分>=75、action_hint=重点观察、非过热/风险候选",
+                "execution": "T日收盘生成候选，T+1日开盘成交",
+            },
+            "summary": {**summary, "entry_signal_count": entry_events, "candidate_days": len(daily_candidates)},
+            "trades": trades,
+            "equity": equity_curve,
+            "daily_candidates": daily_candidates[-20:],
+            "notes": [
+                "这是候选池级别公平回测，不使用未来热点名单倒推过去。",
+                "第一版只验证学习型规则，不包含滑点、涨跌停无法成交、停牌无法成交等更细模型。",
+                "收益为组合口径；单笔收益按投入本金计算，组合收益按初始资金计算。",
+            ],
+        }
+    )
+
+
+def _rolling_candidate_feature_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    enriched_groups: list[pd.DataFrame] = []
+    for _, group in frame.sort_values(["ts_code", "trade_date"]).groupby("ts_code", sort=False):
+        if len(group) < 30:
+            continue
+        enriched = add_technical_indicators(group.rename(columns={"trade_date": "date"}))
+        enriched = enriched.rename(columns={"date": "trade_date"})
+        enriched_groups.append(enriched)
+    if not enriched_groups:
+        return pd.DataFrame()
+    result = pd.concat(enriched_groups, ignore_index=True).sort_values(["ts_code", "trade_date"]).reset_index(drop=True)
+    grouped = result.groupby("ts_code", sort=False)
+    result["previous_close"] = grouped["close"].shift(1)
+    result["change_pct"] = (result["close"] / result["previous_close"] - 1) * 100
+    result["ret20_pct"] = (result["close"] / grouped["close"].shift(19) - 1) * 100
+    result["ret60_pct"] = (result["close"] / grouped["close"].shift(59) - 1) * 100
+    result["amount20"] = grouped["amount"].transform(lambda item: item.rolling(window=20, min_periods=1).mean())
+    result["high20"] = grouped["high"].transform(lambda item: item.rolling(window=20, min_periods=1).max())
+    result["low20"] = grouped["low"].transform(lambda item: item.rolling(window=20, min_periods=1).min())
+    result["drawdown20_pct"] = grouped["close"].transform(
+        lambda item: item.rolling(window=20, min_periods=2).apply(lambda values: float((values / values.cummax() - 1).min() * 100), raw=False)
+    )
+    result["recent_low9"] = grouped["td_buy_setup"].transform(lambda item: (item == 9).rolling(window=5, min_periods=1).max()).astype(bool)
+    result["recent_high9"] = grouped["td_sell_setup"].transform(lambda item: (item == 9).rolling(window=5, min_periods=1).max()).astype(bool)
+    result["recent_bottom_divergence"] = grouped["macd_bottom_divergence"].transform(lambda item: item.rolling(window=10, min_periods=1).max()).astype(bool)
+    result["recent_top_divergence"] = grouped["macd_top_divergence"].transform(lambda item: item.rolling(window=10, min_periods=1).max()).astype(bool)
+    result["recent_bottom_passivation"] = grouped["macd_bottom_passivation"].transform(lambda item: item.rolling(window=10, min_periods=1).max()).astype(bool)
+    result["recent_top_passivation"] = grouped["macd_top_passivation"].transform(lambda item: item.rolling(window=10, min_periods=1).max()).astype(bool)
+    result["consecutive_up"] = grouped["close"].transform(_rolling_consecutive_up)
+    return result
+
+
+def _score_candidates_from_features(features: pd.DataFrame, current: str, limit: int) -> list[dict[str, Any]]:
+    latest = features[features["trade_date"] == current].copy()
+    latest = latest.dropna(subset=["close", "amount"])
+    if latest.empty:
+        return []
+    latest["amount_rank"] = latest["amount"].rank(method="min", ascending=False)
+    latest = latest.nsmallest(800, "amount_rank")
+    rows: list[dict[str, Any]] = []
+    for row in latest.to_dict("records"):
+        if row.get("amount_rank") is None or pd.isna(row.get("amount_rank")):
+            continue
+        tail_ready = row.get("ret20_pct") is not None and not pd.isna(row.get("ret20_pct"))
+        if not tail_ready:
+            continue
+        close = float(row["close"])
+        ma20 = float(row["ma20"])
+        score, group_label, action_hint, reasons, risks = _candidate_score(
+            amount_rank=int(row["amount_rank"]),
+            change_pct=_safe_float(row.get("change_pct")),
+            ret20=_safe_float(row.get("ret20_pct")),
+            ret60=_safe_float(row.get("ret60_pct")),
+            close=close,
+            ma20=ma20,
+            high20=float(row.get("high20") or close),
+            low20=float(row.get("low20") or close),
+            amount=float(row.get("amount") or 0),
+            amount20=float(row.get("amount20") or 0),
+            drawdown20=_safe_float(row.get("drawdown20_pct")) or 0,
+            macd_dif=float(row.get("macd_dif") or 0),
+            macd_dea=float(row.get("macd_dea") or 0),
+            macd_hist=float(row.get("macd_hist") or 0),
+            previous_macd_hist=float(row.get("macd_hist") or 0),
+            kdj_k=float(row.get("kdj_k") or 0),
+            kdj_d=float(row.get("kdj_d") or 0),
+            rsi14=_safe_float(row.get("rsi14")),
+            td_buy_setup=int(row.get("td_buy_setup") or 0),
+            td_sell_setup=int(row.get("td_sell_setup") or 0),
+            recent_low9=bool(row.get("recent_low9")),
+            recent_high9=bool(row.get("recent_high9")),
+            recent_bottom_divergence=bool(row.get("recent_bottom_divergence")),
+            recent_top_divergence=bool(row.get("recent_top_divergence")),
+            recent_bottom_passivation=bool(row.get("recent_bottom_passivation")),
+            recent_top_passivation=bool(row.get("recent_top_passivation")),
+            consecutive_up=int(row.get("consecutive_up") or 0),
+        )
+        rows.append(
+            {
+                "code": display_code(row["ts_code"]),
+                "ts_code": row["ts_code"],
+                "name": _clean_name(row.get("name") or display_code(row["ts_code"])),
+                "score": score,
+                "group": group_label,
+                "action_hint": action_hint,
+                "close": _safe_float(close),
+                "change_pct": _safe_float(row.get("change_pct")),
+                "amount_yi": _safe_float(float(row.get("amount") or 0) / 100000000),
+                "amount_rank": int(row["amount_rank"]),
+                "ret20_pct": _safe_float(row.get("ret20_pct")),
+                "ret60_pct": _safe_float(row.get("ret60_pct")),
+                "drawdown20_pct": _safe_float(row.get("drawdown20_pct")),
+                "rsi14": _safe_float(row.get("rsi14")),
+                "reasons": reasons,
+                "risks": risks,
+            }
+        )
+    rows.sort(key=lambda item: (-int(item["score"]), int(item["amount_rank"])))
+    return rows[:limit]
+
+
+def _rolling_consecutive_up(series: pd.Series) -> pd.Series:
+    result: list[int] = []
+    count = 0
+    previous: float | None = None
+    for value in series:
+        current = _safe_float(value)
+        if previous is not None and current is not None and current > previous:
+            count += 1
+        else:
+            count = 0
+        result.append(count)
+        previous = current
+    return pd.Series(result, index=series.index)
+
+
+def _candidate_entry_allowed(candidate: dict[str, Any], min_score: int) -> bool:
+    if int(candidate.get("score") or 0) < min_score:
+        return False
+    if candidate.get("action_hint") != "重点观察":
+        return False
+    change_pct = _safe_float(candidate.get("change_pct"))
+    if change_pct is not None and change_pct > 8:
+        return False
+    risk_text = " ".join(str(item) for item in candidate.get("risks") or [])
+    if any(keyword in risk_text for keyword in ("过热", "过高", "追高", "高9", "风险较高")):
+        return False
+    return True
+
+
+def _rolling_exit_reason(
+    position: dict[str, Any],
+    signal_bar: dict[str, Any],
+    candidate: dict[str, Any] | None,
+    stop_loss_pct: float,
+    max_holding_days: int,
+) -> str | None:
+    close = _safe_float(signal_bar.get("close"))
+    ma20 = _safe_float(signal_bar.get("ma20"))
+    entry_price = _safe_float(position.get("entry_price"))
+    if close is None or entry_price is None:
+        return None
+    if close <= entry_price * (1 - stop_loss_pct / 100):
+        return f"收盘较买入价回撤超过 {stop_loss_pct:.0f}%"
+    if ma20 is not None and close < ma20:
+        return "收盘跌破MA20趋势风控"
+    holding_days = _date_diff_days(str(position.get("entry_date")), display_trade_date(signal_bar.get("trade_date")) or str(signal_bar.get("trade_date")))
+    if holding_days >= max_holding_days:
+        return f"持仓达到 {max_holding_days} 天，滚动释放仓位"
+    if candidate and candidate.get("action_hint") in {"风险较高", "过热不追"}:
+        return f"候选状态转为{candidate.get('action_hint')}"
+    return None
+
+
+def _portfolio_buy(cash_budget: float, price: float, costs: BacktestCostConfig) -> dict[str, Any]:
+    shares = int(cash_budget / price // 100 * 100) if price > 0 else 0
+    while shares > 0:
+        value = shares * price
+        fee = max(value * costs.commission_rate, costs.min_commission)
+        cash_used = value + fee
+        if cash_used <= cash_budget:
+            return {"shares": shares, "value": value, "fee": fee, "cash_used": cash_used}
+        shares -= 100
+    return {"shares": 0, "value": 0.0, "fee": 0.0, "cash_used": 0.0}
+
+
+def _portfolio_sell(shares: int, price: float, costs: BacktestCostConfig) -> dict[str, Any]:
+    value = shares * price
+    fee = max(value * costs.commission_rate, costs.min_commission) if value > 0 else 0.0
+    tax = value * costs.stamp_tax_rate
+    return {"value": value, "fee": fee, "tax": tax, "cash_delta": value - fee - tax}
+
+
+def _portfolio_equity(cash: float, positions: dict[str, dict[str, Any]], bar_by_key: dict[tuple[str, str], dict[str, Any]], raw_date: str) -> float:
+    market_value = 0.0
+    for ts_code, position in positions.items():
+        bar = bar_by_key.get((raw_date, ts_code))
+        price = _safe_float(bar.get("close")) if bar else None
+        if price is None:
+            price = _safe_float(position.get("entry_price")) or 0.0
+        market_value += int(position.get("shares") or 0) * price
+    return cash + market_value
+
+
+def _rolling_summary(equity_curve: list[dict[str, Any]], trades: list[dict[str, Any]], initial_cash: float) -> dict[str, Any]:
+    if not equity_curve:
+        return {
+            "total_return_pct": None,
+            "annual_return_pct": None,
+            "max_drawdown_pct": None,
+            "trade_count": 0,
+            "closed_trade_count": 0,
+            "win_rate_pct": None,
+            "final_equity": initial_cash,
+            "open_positions": 0,
+        }
+    final_equity = float(equity_curve[-1].get("equity") or initial_cash)
+    total_return_pct = (final_equity / initial_cash - 1) * 100
+    max_drawdown_pct = _drawdown_pct([float(row.get("equity") or initial_cash) for row in equity_curve])
+    closed = [trade for trade in trades if trade.get("status") == "closed"]
+    wins = [trade for trade in closed if (trade.get("pnl") or 0) > 0]
+    days = _date_diff_days(str(equity_curve[0].get("date")), str(equity_curve[-1].get("date")))
+    annual_return_pct = ((final_equity / initial_cash) ** (365 / days) - 1) * 100 if days > 0 else total_return_pct
+    return {
+        "total_return_pct": _safe_float(total_return_pct),
+        "annual_return_pct": _safe_float(annual_return_pct),
+        "max_drawdown_pct": _safe_float(max_drawdown_pct),
+        "trade_count": len(trades),
+        "closed_trade_count": len(closed),
+        "win_rate_pct": _safe_float(len(wins) / len(closed) * 100 if closed else None),
+        "average_holding_days": _safe_float(sum(int(trade.get("holding_days") or 0) for trade in trades) / len(trades) if trades else None),
+        "final_equity": _safe_float(final_equity),
+        "open_positions": len([trade for trade in trades if trade.get("status") == "open"]),
+    }
+
+
+def _date_diff_days(start: str, end: str) -> int:
+    try:
+        return (pd.Timestamp(end) - pd.Timestamp(start)).days
+    except Exception:
+        return 0
+
+
+def _drawdown_pct(equity_values: list[float]) -> float | None:
+    if not equity_values:
+        return None
+    frame = pd.Series(equity_values)
+    drawdown = frame / frame.cummax() - 1
+    return float(drawdown.min() * 100)
 
 
 def _score_candidates(frame: pd.DataFrame, current: str, limit: int) -> list[dict[str, Any]]:

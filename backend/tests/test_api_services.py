@@ -7,7 +7,16 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from backend.api.db import normalize_ts_code
-from backend.api.services import ApiContext, health_status, market_overview, screen_candidates, stock_indicators
+from backend.api.services import (
+    ApiContext,
+    get_agent_model_config,
+    health_status,
+    market_overview,
+    save_agent_model_config,
+    screen_candidate_cache_refresh,
+    screen_candidates,
+    stock_indicators,
+)
 
 
 class ApiServiceTests(unittest.TestCase):
@@ -36,6 +45,8 @@ class ApiServiceTests(unittest.TestCase):
 
             indicators = stock_indicators("300001", ctx=ctx)
             candidates = screen_candidates("2026-06-10", limit=2, ctx=ctx)
+            cached_candidates = screen_candidates("2026-06-10", limit=2, ctx=ctx)
+            refreshed_candidates = screen_candidate_cache_refresh("2026-06-10", limit=2, ctx=ctx)
 
             self.assertGreater(len(indicators["rows"]), 30)
             self.assertIn("macd_dif", indicators["rows"][-1])
@@ -43,6 +54,31 @@ class ApiServiceTests(unittest.TestCase):
             self.assertLessEqual(len(candidates["rows"]), 2)
             self.assertIn("score", candidates["rows"][0])
             self.assertIn("td_sell_setup", candidates["rows"][0])
+            self.assertEqual(candidates["cache"]["status"], "created")
+            self.assertEqual(cached_candidates["cache"]["status"], "hit")
+            self.assertEqual(refreshed_candidates["cache"]["status"], "refreshed")
+            self.assertEqual(cached_candidates["rows"], candidates["rows"])
+
+    def test_agent_model_config_masks_secret(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ctx = _fixture_context(Path(tmp))
+
+            saved = save_agent_model_config(
+                {
+                    "mode": "llm",
+                    "base_url": "https://example.com/v1",
+                    "model": "demo-model",
+                    "api_key": "sk-test-secret",
+                },
+                ctx=ctx,
+            )
+            loaded = get_agent_model_config(ctx)
+
+            self.assertEqual(saved["mode"], "llm")
+            self.assertEqual(loaded["model"], "demo-model")
+            self.assertTrue(loaded["api_key_configured"])
+            self.assertNotIn("api_key", loaded)
+            self.assertIn("••••", loaded["api_key_masked"])
 
 
 def _fixture_context(root: Path) -> ApiContext:

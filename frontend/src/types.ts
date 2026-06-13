@@ -103,6 +103,14 @@ export type Candidate = {
 
 export type CandidateResponse = {
   date: string;
+  raw_date?: string;
+  generated_at?: string;
+  cache_version?: number;
+  cache?: {
+    status: "hit" | "created" | "refreshed" | string;
+    path?: string;
+    version?: number;
+  };
   rows: Candidate[];
 };
 
@@ -138,6 +146,108 @@ export type IndicatorResponse = {
   name: string;
   rows: IndicatorRow[];
   analysis?: StockTechnicalAnalysis;
+};
+
+export type AgentToolResponse<T> = {
+  ok: boolean;
+  tool: string;
+  result: T;
+  error?: string;
+};
+
+export type KlinePattern = {
+  name: string;
+  type: "bullish" | "bearish" | "neutral" | string;
+  confidence: number;
+  date?: string | null;
+  description: string;
+};
+
+export type KlinePatternResponse = {
+  code: string;
+  ts_code: string;
+  name: string;
+  count: number;
+  patterns: KlinePattern[];
+  summary: {
+    bias: "bullish" | "bearish" | "neutral" | "none" | string;
+    counts: Record<string, number>;
+    message: string;
+  };
+};
+
+export type StrategyKnowledgeItem = {
+  filename: string;
+  title: string;
+  sections: string[];
+  excerpt: string;
+  score?: number;
+  matched_terms?: string[];
+  key_conditions?: string[];
+  buy_signals?: string[];
+  sell_signals?: string[];
+  risk_notes?: string[];
+  content?: string;
+};
+
+export type StrategySearchResponse = {
+  query: string;
+  count: number;
+  results: StrategyKnowledgeItem[];
+};
+
+export type StrategyListResponse = {
+  total: number;
+  strategies: StrategyKnowledgeItem[];
+};
+
+export type AgentBriefEvidence = {
+  label: string;
+  value: string | number;
+  hint: string;
+  tone: "active" | "watch" | "defensive" | "neutral" | string;
+};
+
+export type StockAgentBrief = {
+  code: string;
+  name: string;
+  engine?: AgentModelEngine;
+  status: string;
+  action: string;
+  tone: "active" | "watch" | "defensive" | "neutral" | string;
+  summary: string;
+  position_sizing: string;
+  buy_signal: boolean;
+  supporting_reasons: string[];
+  risk_factors: string[];
+  next_steps: string[];
+  invalidation: string[];
+  evidence: AgentBriefEvidence[];
+  strategy_query: string;
+  matched_strategies: StrategyKnowledgeItem[];
+  pattern_summary?: KlinePatternResponse["summary"];
+  source_tools: string[];
+};
+
+export type AgentModelEngine = {
+  mode: "rules" | "llm" | string;
+  label: string;
+  model: string;
+  base_url: string;
+  api_key_configured: boolean;
+  note: string;
+};
+
+export type AgentModelConfig = {
+  mode: "rules" | "llm" | string;
+  provider: string;
+  base_url: string;
+  model: string;
+  temperature: number;
+  max_tokens: number;
+  updated_at?: string | null;
+  api_key_configured: boolean;
+  api_key_masked: string;
 };
 
 export type StockTechnicalAnalysis = {
@@ -281,4 +391,60 @@ export type BacktestJob = {
   status: "ready" | "queued" | "running" | "done" | "failed" | string;
   message: string;
   run?: string;
+};
+
+export type CandidateRollingBacktest = {
+  status: string;
+  generated_at?: string;
+  method?: string;
+  description?: string;
+  start_date?: string;
+  end_date?: string;
+  parameters?: Record<string, string | number | boolean | null>;
+  summary?: {
+    total_return_pct?: number | null;
+    annual_return_pct?: number | null;
+    max_drawdown_pct?: number | null;
+    trade_count?: number;
+    closed_trade_count?: number;
+    win_rate_pct?: number | null;
+    average_holding_days?: number | null;
+    final_equity?: number | null;
+    open_positions?: number;
+    entry_signal_count?: number;
+    candidate_days?: number;
+  };
+  trades: Array<{
+    code: string;
+    name: string;
+    entry_signal_date?: string | null;
+    entry_date?: string | null;
+    entry_price?: number | null;
+    entry_reason?: string | null;
+    exit_signal_date?: string | null;
+    exit_date?: string | null;
+    exit_price?: number | null;
+    exit_reason?: string | null;
+    status?: string;
+    holding_days?: number | null;
+    pnl?: number | null;
+    return_pct?: number | null;
+  }>;
+  equity: Array<{
+    date: string;
+    cash: number | null;
+    market_value: number | null;
+    equity: number | null;
+    positions: number;
+  }>;
+  daily_candidates?: Array<{
+    date: string;
+    count: number;
+    top: Candidate[];
+  }>;
+  notes?: string[];
+  cache?: {
+    status: string;
+    path: string;
+  };
 };
