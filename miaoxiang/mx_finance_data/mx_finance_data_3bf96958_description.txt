@@ -1,0 +1,8 @@
+金融数据查询结果说明
+========================================
+查询内容: 查询上证指数、深证成指、创业板指、沪深300、中证500在2026-07-07的收盘点位、涨跌幅和成交额
+数据文件路径: /Users/hao/github/x-growth-ai/miaoxiang/mx_finance_data/mx_finance_data_3bf96958.xlsx
+描述文件路径: /Users/hao/github/x-growth-ai/miaoxiang/mx_finance_data/mx_finance_data_3bf96958_description.txt
+数据行数: 3
+表数量: 1
+Sheet 列表: 上证指数(000001.SH)等的成交额、涨跌幅等

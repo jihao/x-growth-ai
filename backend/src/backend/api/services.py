@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import math
+import re
+import secrets
 import sqlite3
 import threading
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +37,8 @@ _BACKTEST_JOBS: dict[str, dict[str, Any]] = {}
 REVIEW_CACHE_VERSION = 6
 AGENT_MODEL_CONFIG_VERSION = 1
 SCREEN_CANDIDATE_CACHE_VERSION = 1
+SESSION_DAYS = 14
+PASSWORD_ITERATIONS = 260000
 
 
 @dataclass(frozen=True)
@@ -44,6 +50,580 @@ class ApiContext:
 def context() -> ApiContext:
     root = find_repo_root()
     return ApiContext(repo_root=root, db_path=default_db_path(root))
+
+
+def ensure_auth_schema(ctx: ApiContext | None = None) -> None:
+    ctx = ctx or context()
+    with connect(ctx.db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                status TEXT NOT NULL DEFAULT 'active',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_login_at TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_sessions (
+                token TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                FOREIGN KEY(user_id) REFERENCES app_users(id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_app_sessions_user_id ON app_sessions(user_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_app_sessions_expires_at ON app_sessions(expires_at)")
+        count = conn.execute("SELECT COUNT(*) value FROM app_users").fetchone()["value"]
+        if int(count) == 0:
+            now = _now_text()
+            conn.execute(
+                """
+                INSERT INTO app_users (username, display_name, password_hash, role, status, created_at, updated_at)
+                VALUES (?, ?, ?, 'admin', 'active', ?, ?)
+                """,
+                ("admin", "管理员", _hash_password("admin123"), now, now),
+            )
+
+
+def ensure_tool_run_schema(ctx: ApiContext | None = None) -> None:
+    ctx = ctx or context()
+    with connect(ctx.db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_tool_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tool_name TEXT NOT NULL,
+                arguments_json TEXT NOT NULL,
+                ok INTEGER NOT NULL,
+                result_summary TEXT NOT NULL,
+                error TEXT,
+                duration_ms INTEGER NOT NULL,
+                user_id INTEGER,
+                created_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_app_tool_runs_created_at ON app_tool_runs(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_app_tool_runs_tool_name ON app_tool_runs(tool_name)")
+
+
+def ensure_watchlist_schema(ctx: ApiContext | None = None) -> None:
+    ctx = ctx or context()
+    with connect(ctx.db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS app_watchlist (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE,
+                ts_code TEXT,
+                name TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'watching',
+                priority TEXT NOT NULL DEFAULT 'medium',
+                source TEXT NOT NULL DEFAULT 'manual',
+                note TEXT NOT NULL DEFAULT '',
+                tags_json TEXT NOT NULL DEFAULT '[]',
+                target_price REAL,
+                stop_loss REAL,
+                user_id INTEGER,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL
+            )
+            """
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_app_watchlist_status ON app_watchlist(status)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_app_watchlist_priority ON app_watchlist(priority)")
+
+
+def record_tool_run(
+    tool_name: str,
+    arguments: dict[str, Any],
+    result: dict[str, Any],
+    duration_ms: int,
+    user_id: int | None = None,
+    ctx: ApiContext | None = None,
+) -> dict[str, Any]:
+    ctx = ctx or context()
+    ensure_tool_run_schema(ctx)
+    ok = bool(result.get("ok"))
+    summary = _tool_result_summary(result)
+    now = _now_text()
+    with connect(ctx.db_path) as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO app_tool_runs (tool_name, arguments_json, ok, result_summary, error, duration_ms, user_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                tool_name,
+                json.dumps(_json_ready(arguments), ensure_ascii=False),
+                1 if ok else 0,
+                summary,
+                str(result.get("error") or "") or None,
+                max(0, int(duration_ms)),
+                user_id,
+                now,
+            ),
+        )
+        row = conn.execute("SELECT * FROM app_tool_runs WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return _tool_run_row(dict(row))
+
+
+def list_tool_runs(limit: int = 50, tool_name: str | None = None, ctx: ApiContext | None = None) -> list[dict[str, Any]]:
+    ctx = ctx or context()
+    ensure_tool_run_schema(ctx)
+    safe_limit = min(max(int(limit or 50), 1), 200)
+    with connect(ctx.db_path) as conn:
+        if tool_name:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM app_tool_runs
+                WHERE tool_name = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (tool_name, safe_limit),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM app_tool_runs
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (safe_limit,),
+            ).fetchall()
+    return [_tool_run_row(dict(row)) for row in rows]
+
+
+def _tool_run_row(row: dict[str, Any]) -> dict[str, Any]:
+    try:
+        arguments = json.loads(row.get("arguments_json") or "{}")
+    except json.JSONDecodeError:
+        arguments = {}
+    return {
+        "id": row["id"],
+        "tool_name": row["tool_name"],
+        "arguments": arguments,
+        "ok": bool(row["ok"]),
+        "result_summary": row["result_summary"],
+        "error": row.get("error"),
+        "duration_ms": row["duration_ms"],
+        "user_id": row.get("user_id"),
+        "created_at": row["created_at"],
+    }
+
+
+def _tool_result_summary(result: dict[str, Any]) -> str:
+    if not result.get("ok"):
+        return str(result.get("error") or "工具运行失败")[:500]
+    payload = result.get("result")
+    if isinstance(payload, dict):
+        for key in ["status", "summary", "message", "description", "date", "name"]:
+            value = payload.get(key)
+            if value:
+                return str(value)[:500]
+        return f"{len(payload)} 个字段"
+    if isinstance(payload, list):
+        return f"{len(payload)} 条结果"
+    return str(payload)[:500]
+
+
+def list_watchlist(status: str | None = None, ctx: ApiContext | None = None) -> list[dict[str, Any]]:
+    ctx = ctx or context()
+    ensure_watchlist_schema(ctx)
+    with connect(ctx.db_path) as conn:
+        if status and status != "all":
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM app_watchlist
+                WHERE status = ?
+                ORDER BY
+                    CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+                    updated_at DESC,
+                    id DESC
+                """,
+                (status,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM app_watchlist
+                ORDER BY
+                    CASE status WHEN 'watching' THEN 1 WHEN 'pullback' THEN 2 WHEN 'breakout' THEN 3 WHEN 'holding' THEN 4 ELSE 5 END,
+                    CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END,
+                    updated_at DESC,
+                    id DESC
+                """
+            ).fetchall()
+    return [_watchlist_row(dict(row)) for row in rows]
+
+
+def upsert_watchlist_item(payload: dict[str, Any], user_id: int | None = None, ctx: ApiContext | None = None) -> dict[str, Any]:
+    ctx = ctx or context()
+    ensure_watchlist_schema(ctx)
+    raw_code = str(payload.get("code") or "").strip()
+    if not raw_code:
+        raise ValueError("股票代码不能为空")
+    code = display_code(normalize_ts_code(raw_code))
+    name = str(payload.get("name") or code).strip()
+    ts_code = str(payload.get("ts_code") or "").strip() or None
+    status = _watch_status(payload.get("status"), default="watching")
+    priority = _watch_priority(payload.get("priority"), default="medium")
+    source = str(payload.get("source") or "manual").strip()[:80] or "manual"
+    note = str(payload.get("note") or "").strip()
+    tags = _watch_tags(payload.get("tags"))
+    target_price = _optional_float(payload.get("target_price"))
+    stop_loss = _optional_float(payload.get("stop_loss"))
+    now = _now_text()
+    with connect(ctx.db_path) as conn:
+        existing = conn.execute("SELECT * FROM app_watchlist WHERE code = ?", (code,)).fetchone()
+        if existing:
+            merged_note = note or existing["note"] or ""
+            merged_tags = tags or _parse_json_list(existing["tags_json"])
+            conn.execute(
+                """
+                UPDATE app_watchlist
+                SET ts_code = ?, name = ?, status = ?, priority = ?, source = ?, note = ?, tags_json = ?,
+                    target_price = ?, stop_loss = ?, user_id = COALESCE(?, user_id), updated_at = ?, last_seen_at = ?
+                WHERE code = ?
+                """,
+                (
+                    ts_code or existing["ts_code"],
+                    name or existing["name"],
+                    status,
+                    priority,
+                    source,
+                    merged_note,
+                    json.dumps(merged_tags, ensure_ascii=False),
+                    target_price if target_price is not None else existing["target_price"],
+                    stop_loss if stop_loss is not None else existing["stop_loss"],
+                    user_id,
+                    now,
+                    now,
+                    code,
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO app_watchlist
+                    (code, ts_code, name, status, priority, source, note, tags_json, target_price, stop_loss, user_id, created_at, updated_at, last_seen_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    code,
+                    ts_code,
+                    name,
+                    status,
+                    priority,
+                    source,
+                    note,
+                    json.dumps(tags, ensure_ascii=False),
+                    target_price,
+                    stop_loss,
+                    user_id,
+                    now,
+                    now,
+                    now,
+                ),
+            )
+        row = conn.execute("SELECT * FROM app_watchlist WHERE code = ?", (code,)).fetchone()
+    return _watchlist_row(dict(row))
+
+
+def update_watchlist_item(item_id: int, payload: dict[str, Any], ctx: ApiContext | None = None) -> dict[str, Any]:
+    ctx = ctx or context()
+    ensure_watchlist_schema(ctx)
+    with connect(ctx.db_path) as conn:
+        row = conn.execute("SELECT * FROM app_watchlist WHERE id = ?", (item_id,)).fetchone()
+        if row is None:
+            raise LookupError("观察项不存在")
+        current = dict(row)
+        status = _watch_status(payload.get("status"), default=current["status"])
+        priority = _watch_priority(payload.get("priority"), default=current["priority"])
+        note = str(payload.get("note") if payload.get("note") is not None else current["note"]).strip()
+        tags = _watch_tags(payload.get("tags")) if "tags" in payload else _parse_json_list(current["tags_json"])
+        target_price = _optional_float(payload.get("target_price")) if "target_price" in payload else current["target_price"]
+        stop_loss = _optional_float(payload.get("stop_loss")) if "stop_loss" in payload else current["stop_loss"]
+        conn.execute(
+            """
+            UPDATE app_watchlist
+            SET status = ?, priority = ?, note = ?, tags_json = ?, target_price = ?, stop_loss = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (status, priority, note, json.dumps(tags, ensure_ascii=False), target_price, stop_loss, _now_text(), item_id),
+        )
+        updated = conn.execute("SELECT * FROM app_watchlist WHERE id = ?", (item_id,)).fetchone()
+    return _watchlist_row(dict(updated))
+
+
+def delete_watchlist_item(item_id: int, ctx: ApiContext | None = None) -> dict[str, Any]:
+    ctx = ctx or context()
+    ensure_watchlist_schema(ctx)
+    with connect(ctx.db_path) as conn:
+        cursor = conn.execute("DELETE FROM app_watchlist WHERE id = ?", (item_id,))
+    if cursor.rowcount == 0:
+        raise LookupError("观察项不存在")
+    return {"ok": True}
+
+
+def _watchlist_row(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "code": row["code"],
+        "ts_code": row.get("ts_code"),
+        "name": row["name"],
+        "status": row["status"],
+        "priority": row["priority"],
+        "source": row["source"],
+        "note": row["note"],
+        "tags": _parse_json_list(row.get("tags_json")),
+        "target_price": row.get("target_price"),
+        "stop_loss": row.get("stop_loss"),
+        "user_id": row.get("user_id"),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "last_seen_at": row["last_seen_at"],
+    }
+
+
+def _watch_status(value: Any, default: str) -> str:
+    allowed = {"watching", "pullback", "breakout", "holding", "paused", "removed"}
+    status = str(value or default).strip()
+    return status if status in allowed else default
+
+
+def _watch_priority(value: Any, default: str) -> str:
+    allowed = {"high", "medium", "low"}
+    priority = str(value or default).strip()
+    return priority if priority in allowed else default
+
+
+def _watch_tags(value: Any) -> list[str]:
+    if isinstance(value, list):
+        raw = value
+    elif isinstance(value, str):
+        raw = re.split(r"[,，\\s]+", value)
+    else:
+        raw = []
+    tags: list[str] = []
+    for item in raw:
+        tag = str(item or "").strip()
+        if tag and tag not in tags:
+            tags.append(tag[:24])
+    return tags[:8]
+
+
+def _parse_json_list(value: Any) -> list[str]:
+    try:
+        parsed = json.loads(str(value or "[]"))
+    except json.JSONDecodeError:
+        return []
+    return [str(item) for item in parsed if str(item).strip()][:8] if isinstance(parsed, list) else []
+
+
+def _optional_float(value: Any) -> float | None:
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def register_user(payload: dict[str, Any], ctx: ApiContext | None = None) -> dict[str, Any]:
+    ctx = ctx or context()
+    ensure_auth_schema(ctx)
+    username = _normalize_username(payload.get("username"))
+    password = str(payload.get("password") or "")
+    display_name = _clean_name(payload.get("display_name")) or username
+    if not username:
+        raise ValueError("用户名需为 3-32 位字母、数字、下划线或短横线")
+    if len(password) < 6:
+        raise ValueError("密码至少 6 位")
+    now = _now_text()
+    try:
+        with connect(ctx.db_path) as conn:
+            existing = int(conn.execute("SELECT COUNT(*) value FROM app_users").fetchone()["value"])
+            role = "admin" if existing == 0 else "user"
+            cursor = conn.execute(
+                """
+                INSERT INTO app_users (username, display_name, password_hash, role, status, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'active', ?, ?)
+                """,
+                (username, display_name, _hash_password(password), role, now, now),
+            )
+            user = conn.execute("SELECT * FROM app_users WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    except sqlite3.IntegrityError as exc:
+        raise ValueError("用户名已存在") from exc
+    return public_user(dict(user))
+
+
+def login_user(payload: dict[str, Any], ctx: ApiContext | None = None) -> dict[str, Any]:
+    ctx = ctx or context()
+    ensure_auth_schema(ctx)
+    username = _normalize_username(payload.get("username"))
+    password = str(payload.get("password") or "")
+    if not username or not password:
+        raise ValueError("请输入用户名和密码")
+    with connect(ctx.db_path) as conn:
+        row = conn.execute("SELECT * FROM app_users WHERE username = ?", (username,)).fetchone()
+        if row is None or row["status"] != "active" or not _verify_password(password, row["password_hash"]):
+            raise PermissionError("用户名或密码错误")
+        token = secrets.token_urlsafe(32)
+        now = datetime.now()
+        expires = now + timedelta(days=SESSION_DAYS)
+        conn.execute("DELETE FROM app_sessions WHERE expires_at <= ?", (_now_text(),))
+        conn.execute(
+            "INSERT INTO app_sessions (token, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)",
+            (token, row["id"], now.isoformat(timespec="seconds"), expires.isoformat(timespec="seconds")),
+        )
+        conn.execute("UPDATE app_users SET last_login_at = ?, updated_at = ? WHERE id = ?", (_now_text(), _now_text(), row["id"]))
+    user = current_user(token, ctx)
+    return {"token": token, "expires_at": expires.isoformat(timespec="seconds"), "user": user}
+
+
+def logout_user(token: str | None, ctx: ApiContext | None = None) -> None:
+    if not token:
+        return
+    ctx = ctx or context()
+    ensure_auth_schema(ctx)
+    with connect(ctx.db_path) as conn:
+        conn.execute("DELETE FROM app_sessions WHERE token = ?", (token,))
+
+
+def current_user(token: str | None, ctx: ApiContext | None = None) -> dict[str, Any] | None:
+    if not token:
+        return None
+    ctx = ctx or context()
+    ensure_auth_schema(ctx)
+    with connect(ctx.db_path) as conn:
+        conn.execute("DELETE FROM app_sessions WHERE expires_at <= ?", (_now_text(),))
+        row = conn.execute(
+            """
+            SELECT u.*
+            FROM app_sessions s
+            JOIN app_users u ON u.id = s.user_id
+            WHERE s.token = ? AND s.expires_at > ? AND u.status = 'active'
+            """,
+            (token, _now_text()),
+        ).fetchone()
+    return public_user(dict(row)) if row else None
+
+
+def list_users(actor: dict[str, Any], ctx: ApiContext | None = None) -> list[dict[str, Any]]:
+    _require_admin(actor)
+    ctx = ctx or context()
+    ensure_auth_schema(ctx)
+    with connect(ctx.db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT id, username, display_name, role, status, created_at, updated_at, last_login_at
+            FROM app_users
+            ORDER BY created_at DESC, id DESC
+            """
+        ).fetchall()
+    return rows_to_dicts(rows)
+
+
+def update_user(user_id: int, payload: dict[str, Any], actor: dict[str, Any], ctx: ApiContext | None = None) -> dict[str, Any]:
+    _require_admin(actor)
+    ctx = ctx or context()
+    ensure_auth_schema(ctx)
+    allowed_roles = {"admin", "user"}
+    allowed_status = {"active", "disabled"}
+    display_name = _clean_name(payload.get("display_name"))
+    role = str(payload.get("role") or "").strip()
+    status = str(payload.get("status") or "").strip()
+    password = str(payload.get("password") or "")
+    with connect(ctx.db_path) as conn:
+        row = conn.execute("SELECT * FROM app_users WHERE id = ?", (user_id,)).fetchone()
+        if row is None:
+            raise LookupError("用户不存在")
+        next_display = display_name or row["display_name"]
+        next_role = role if role in allowed_roles else row["role"]
+        next_status = status if status in allowed_status else row["status"]
+        if int(actor["id"]) == int(user_id) and next_status != "active":
+            raise ValueError("不能禁用当前登录账户")
+        if password:
+            if len(password) < 6:
+                raise ValueError("密码至少 6 位")
+            conn.execute(
+                """
+                UPDATE app_users
+                SET display_name = ?, role = ?, status = ?, password_hash = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (next_display, next_role, next_status, _hash_password(password), _now_text(), user_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE app_users SET display_name = ?, role = ?, status = ?, updated_at = ? WHERE id = ?",
+                (next_display, next_role, next_status, _now_text(), user_id),
+            )
+        updated = conn.execute("SELECT * FROM app_users WHERE id = ?", (user_id,)).fetchone()
+    return public_user(dict(updated))
+
+
+def public_user(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "username": row["username"],
+        "display_name": row["display_name"],
+        "role": row["role"],
+        "status": row["status"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+        "last_login_at": row.get("last_login_at"),
+    }
+
+
+def _require_admin(actor: dict[str, Any]) -> None:
+    if actor.get("role") != "admin":
+        raise PermissionError("需要管理员权限")
+
+
+def _normalize_username(value: Any) -> str:
+    username = str(value or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9_-]{3,32}", username):
+        return ""
+    return username
+
+
+def _hash_password(password: str) -> str:
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), PASSWORD_ITERATIONS).hex()
+    return f"pbkdf2_sha256${PASSWORD_ITERATIONS}${salt}${digest}"
+
+
+def _verify_password(password: str, encoded: str) -> bool:
+    try:
+        method, iterations, salt, expected = encoded.split("$", 3)
+        if method != "pbkdf2_sha256":
+            return False
+        digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), int(iterations)).hex()
+    except (ValueError, TypeError):
+        return False
+    return hmac.compare_digest(digest, expected)
+
+
+def _now_text() -> str:
+    return datetime.now().isoformat(timespec="seconds")
 
 
 def agent_model_config_path(ctx: ApiContext | None = None) -> Path:
@@ -151,6 +731,130 @@ def health_status(ctx: ApiContext | None = None) -> dict[str, Any]:
         }
     )
     return payload
+
+
+def trading_days(
+    start: str | None = None,
+    end: str | None = None,
+    lookback: int = 260,
+    ctx: ApiContext | None = None,
+) -> dict[str, Any]:
+    ctx = ctx or context()
+    if not ctx.db_path.exists():
+        return {"ok": False, "source": "daily_qfq", "dates": [], "latest": None, "previous": None, "count": 0}
+    safe_lookback = min(max(int(lookback or 260), 20), 1200)
+    start_raw = normalize_trade_date(start)
+    end_raw = normalize_trade_date(end)
+    with connect(ctx.db_path) as conn:
+        if start_raw or end_raw:
+            clauses = []
+            params: list[Any] = []
+            if start_raw:
+                clauses.append("trade_date >= ?")
+                params.append(start_raw)
+            if end_raw:
+                clauses.append("trade_date <= ?")
+                params.append(end_raw)
+            rows = conn.execute(
+                f"""
+                SELECT DISTINCT trade_date
+                FROM daily_qfq
+                WHERE {" AND ".join(clauses)}
+                ORDER BY trade_date
+                """,
+                params,
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT trade_date
+                FROM (
+                    SELECT DISTINCT trade_date
+                    FROM daily_qfq
+                    ORDER BY trade_date DESC
+                    LIMIT ?
+                )
+                ORDER BY trade_date
+                """,
+                (safe_lookback,),
+            ).fetchall()
+    raw_dates = [row["trade_date"] for row in rows]
+    dates = [display_trade_date(value) for value in raw_dates]
+    latest = dates[-1] if dates else None
+    previous = dates[-2] if len(dates) >= 2 else None
+    return {
+        "ok": True,
+        "source": "daily_qfq",
+        "dates": dates,
+        "latest": latest,
+        "previous": previous,
+        "count": len(dates),
+        "start": dates[0] if dates else None,
+        "end": latest,
+    }
+
+
+def system_status(ctx: ApiContext | None = None) -> dict[str, Any]:
+    ctx = ctx or context()
+    health = health_status(ctx)
+    calendar = trading_days(lookback=5, ctx=ctx)
+    model_config = get_agent_model_config(ctx)
+    jobs = list(_BACKTEST_JOBS.values())
+    running_jobs = [job for job in jobs if job.get("status") in {"queued", "running"}]
+    services_payload = [
+        {
+            "key": "database",
+            "label": "SQLite 行情库",
+            "status": "ok" if health.get("ok") else "error",
+            "message": health.get("latest_date") or "数据库不可用",
+        },
+        {
+            "key": "calendar",
+            "label": "交易日历",
+            "status": "ok" if calendar.get("count") else "warning",
+            "message": f"{calendar.get('count', 0)} 个交易日，最新 {calendar.get('latest') or '-'}",
+        },
+        {
+            "key": "agent_tools",
+            "label": "Agent 工具",
+            "status": "ok",
+            "message": "工具注册表可用",
+        },
+        {
+            "key": "agent_model",
+            "label": "AI 模型",
+            "status": "ok" if model_config.get("mode") == "rules" or model_config.get("api_key_configured") else "warning",
+            "message": model_config.get("engine", model_config.get("mode", "rules")),
+        },
+        {
+            "key": "backtest_jobs",
+            "label": "回测任务",
+            "status": "running" if running_jobs else "ok",
+            "message": f"{len(running_jobs)} 个运行中 / {len(jobs)} 个缓存任务",
+        },
+    ]
+    return {
+        "ok": bool(health.get("ok")),
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "latest_trade_date": health.get("latest_date"),
+        "database": health.get("database"),
+        "services": services_payload,
+    }
+
+
+def unread_notifications(ctx: ApiContext | None = None) -> dict[str, Any]:
+    status = system_status(ctx)
+    items = [
+        {
+            "id": item["key"],
+            "title": item["label"],
+            "status": item["status"],
+            "message": item["message"],
+        }
+        for item in status.get("services", [])
+        if item.get("status") in {"warning", "error", "running"}
+    ]
+    return {"count": len(items), "items": items}
 
 
 def latest_trade_date(conn: Any, target: str | None = None) -> str | None:

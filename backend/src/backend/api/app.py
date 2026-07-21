@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi import FastAPI, HTTPException, Query
+import time
+
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.agent_tools import TOOL_NAMES, run_tool, tool_definitions
@@ -11,11 +13,31 @@ app = FastAPI(title="X-Growth AI", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:5174", "http://127.0.0.1:5174"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "http://127.0.0.1:5174",
+        "http://localhost:8000",
+        "http://127.0.0.1:8000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+SESSION_COOKIE = "x_growth_session"
+
+
+def _session_token(request: Request) -> str | None:
+    return request.cookies.get(SESSION_COOKIE)
+
+
+def _current_user_or_401(request: Request) -> dict:
+    user = services.current_user(_session_token(request))
+    if user is None:
+        raise HTTPException(status_code=401, detail="not authenticated")
+    return user
 
 
 @app.get("/api/health")
@@ -23,14 +45,137 @@ def health() -> dict:
     return services.health_status()
 
 
+@app.get("/api/calendar/trading-days")
+def calendar_trading_days(
+    start: str | None = None,
+    end: str | None = None,
+    lookback: int = Query(260, ge=20, le=1200),
+) -> dict:
+    return services.trading_days(start=start, end=end, lookback=lookback)
+
+
+@app.get("/api/tasks/system-status")
+def tasks_system_status() -> dict:
+    return services.system_status()
+
+
+@app.get("/api/notifications/unread-count")
+def notifications_unread_count() -> dict:
+    return services.unread_notifications()
+
+
+@app.post("/api/auth/register")
+def auth_register(payload: dict) -> dict:
+    try:
+        return services.register_user(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/auth/login")
+def auth_login(payload: dict, response: Response) -> dict:
+    try:
+        session = services.login_user(payload)
+    except (ValueError, PermissionError) as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    response.set_cookie(
+        SESSION_COOKIE,
+        session["token"],
+        httponly=True,
+        samesite="lax",
+        max_age=14 * 24 * 60 * 60,
+        path="/",
+    )
+    return {"user": session["user"], "expires_at": session["expires_at"]}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(request: Request, response: Response) -> dict:
+    services.logout_user(_session_token(request))
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"ok": True}
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request) -> dict:
+    user = services.current_user(_session_token(request))
+    return {"user": user}
+
+
+@app.get("/api/users")
+def users_index(request: Request) -> list[dict]:
+    try:
+        return services.list_users(_current_user_or_401(request))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+
+@app.put("/api/users/{user_id}")
+def users_update(user_id: int, payload: dict, request: Request) -> dict:
+    try:
+        return services.update_user(user_id, payload, _current_user_or_401(request))
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/watchlist")
+def watchlist_index(status: str | None = None) -> list[dict]:
+    return services.list_watchlist(status=status)
+
+
+@app.post("/api/watchlist")
+def watchlist_upsert(payload: dict, request: Request) -> dict:
+    try:
+        user = services.current_user(_session_token(request))
+        return services.upsert_watchlist_item(payload, user_id=user["id"] if user else None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.put("/api/watchlist/{item_id}")
+def watchlist_update(item_id: int, payload: dict) -> dict:
+    try:
+        return services.update_watchlist_item(item_id, payload)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.delete("/api/watchlist/{item_id}")
+def watchlist_delete(item_id: int) -> dict:
+    try:
+        return services.delete_watchlist_item(item_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @app.get("/api/agent/tools")
 def agent_tools() -> dict:
     return {"count": len(TOOL_NAMES), "tools": tool_definitions()}
 
 
+@app.get("/api/agent/tool-runs")
+def agent_tool_runs(limit: int = Query(50, ge=1, le=200), tool_name: str | None = None) -> list[dict]:
+    return services.list_tool_runs(limit=limit, tool_name=tool_name)
+
+
 @app.post("/api/agent/tools/{tool_name}/run")
-def run_agent_tool(tool_name: str, arguments: dict | None = None) -> dict:
-    result = run_tool(tool_name, arguments or {})
+def run_agent_tool(tool_name: str, request: Request, arguments: dict | None = None) -> dict:
+    payload = arguments or {}
+    start = time.perf_counter()
+    result = run_tool(tool_name, payload)
+    duration_ms = int((time.perf_counter() - start) * 1000)
+    user = services.current_user(_session_token(request))
+    services.record_tool_run(
+        tool_name=tool_name,
+        arguments=payload,
+        result=result,
+        duration_ms=duration_ms,
+        user_id=user["id"] if user else None,
+    )
     if not result.get("ok"):
         raise HTTPException(status_code=400, detail=result)
     return result

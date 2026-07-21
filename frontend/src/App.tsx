@@ -1,245 +1,204 @@
-import { useEffect, useMemo, useState } from "react";
-import { api } from "./api";
-import { REVIEW_STORAGE_KEY, technicalKeys, type Page, type ReviewNote } from "./appTypes";
-import { AppShell } from "./components/AppShell";
+import { LinkOutlined } from '@ant-design/icons';
+import type { Settings as LayoutSettings } from '@ant-design/pro-components';
+import { SettingDrawer } from '@ant-design/pro-components';
+import type { RequestConfig, RunTimeLayoutConfig } from '@umijs/max';
+import { history, Link } from '@umijs/max';
+import dayjs from 'dayjs';
+import relativeTime from 'dayjs/plugin/relativeTime';
+import React from 'react';
+
+// Initialize dayjs plugins globally
+dayjs.extend(relativeTime);
+
 import {
-  ConcentrationPage,
-  DataPage,
-  HomePage,
-  HistoryReportsPage,
-  LearningPage,
-  ReportsPage,
-  ScreenPage,
-  StockPage,
-  StrategyPage
-} from "./components/AppSections";
-import type {
-  BacktestJob,
-  Candidate,
-  CandidateResponse,
-  ConcentrationResponse,
-  Health,
-  IndicatorResponse,
-  KlinePatternResponse,
-  LearningItem,
-  MarketOverview,
-  ReportItem,
-  StockAgentBrief,
-  StrategySearchResponse,
-  StockStrategyDetail,
-  StrategySummary
-} from "./types";
-import { sleep } from "./utils/async";
-import { loadReviewNotes } from "./utils/reviewStorage";
+  AvatarDropdown,
+  DocLink,
+  ErrorBoundary,
+  Footer,
+  LangDropdown,
+  OfflineBanner,
+  VersionDropdown,
+} from '@/components';
+import { currentUser as queryCurrentUser } from '@/services/ant-design-pro/api';
+import defaultSettings from '../config/defaultSettings';
+import { errorConfig } from './requestErrorConfig';
 
-export function App() {
-  const [page, setPage] = useState<Page>("home");
-  const [health, setHealth] = useState<Health | null>(null);
-  const [overview, setOverview] = useState<MarketOverview | null>(null);
-  const [candidates, setCandidates] = useState<Candidate[]>([]);
-  const [selected, setSelected] = useState<Candidate | null>(null);
-  const [indicators, setIndicators] = useState<IndicatorResponse | null>(null);
-  const [patterns, setPatterns] = useState<KlinePatternResponse | null>(null);
-  const [matchedStrategies, setMatchedStrategies] = useState<StrategySearchResponse | null>(null);
-  const [agentBrief, setAgentBrief] = useState<StockAgentBrief | null>(null);
-  const [agentBriefLoading, setAgentBriefLoading] = useState(false);
-  const [stockStrategies, setStockStrategies] = useState<StockStrategyDetail | null>(null);
-  const [backtestJob, setBacktestJob] = useState<BacktestJob | null>(null);
-  const [reports, setReports] = useState<ReportItem[]>([]);
-  const [learning, setLearning] = useState<LearningItem[]>([]);
-  const [strategies, setStrategies] = useState<StrategySummary[]>([]);
-  const [concentration, setConcentration] = useState<ConcentrationResponse | null>(null);
-  const [reviewNotes, setReviewNotes] = useState<Record<string, ReviewNote>>({});
-  const [groupFilter, setGroupFilter] = useState("全部");
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+const isDev = process.env.NODE_ENV === 'development';
+const loginPath = '/user/login';
 
-  async function loadCore() {
-    setLoading(true);
-    setError(null);
+/**
+ * @see https://umijs.org/docs/api/runtime-config#getinitialstate
+ * */
+export async function getInitialState(): Promise<{
+  settings?: Partial<LayoutSettings>;
+  currentUser?: API.CurrentUser;
+  loading?: boolean;
+  fetchUserInfo?: () => Promise<API.CurrentUser | undefined>;
+  settingDrawerOpen?: boolean;
+}> {
+  const fetchUserInfo = async () => {
     try {
-      const [healthData, overviewData, reportData, learningData, strategyData] = await Promise.all([
-        api.health(),
-        api.overview(),
-        api.reports(),
-        api.learning(),
-        api.strategies()
-      ]);
-      setHealth(healthData);
-      setOverview(overviewData);
-      setReports(reportData);
-      setLearning(learningData);
-      setStrategies((strategyData.summary as StrategySummary[]) ?? []);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "加载失败");
-    } finally {
-      setLoading(false);
-    }
-
-    api.candidates(50)
-      .then((candidateData: CandidateResponse) => {
-        setCandidates(candidateData.rows);
-        setSelected((current) => current ?? candidateData.rows[0] ?? null);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : "候选池加载失败"));
-    api.concentration(60, "top250")
-      .then(setConcentration)
-      .catch((err) => setError(err instanceof Error ? err.message : "集中度加载失败"));
-  }
-
-  useEffect(() => {
-    loadCore();
-    setReviewNotes(loadReviewNotes());
-  }, []);
-
-  function saveReviewNote(note: ReviewNote) {
-    setReviewNotes((current) => {
-      const next = { ...current, [note.code]: note };
-      window.localStorage.setItem(REVIEW_STORAGE_KEY, JSON.stringify(next));
-      return next;
-    });
-  }
-
-  useEffect(() => {
-    if (!selected) return;
-    let cancelled = false;
-    const current = selected;
-    setPatterns(null);
-    setMatchedStrategies(null);
-    setAgentBrief(null);
-    setAgentBriefLoading(true);
-    api.indicators(current.code).then(setIndicators).catch((err) => setError(err.message));
-    api.klinePatterns(current.code)
-      .then((payload) => {
-        if (!cancelled) setPatterns(payload.result);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : "K线形态加载失败"));
-    api.searchStrategyKnowledge(strategyQueryForCandidate(current), 3)
-      .then((payload) => {
-        if (!cancelled) setMatchedStrategies(payload.result);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : "战法匹配加载失败"));
-    api.stockAgentBrief(current.code)
-      .then((payload) => {
-        if (!cancelled) setAgentBrief(payload.result);
-      })
-      .catch((err) => setError(err instanceof Error ? err.message : "AI操作建议加载失败"))
-      .finally(() => {
-        if (!cancelled) setAgentBriefLoading(false);
+      const msg = await queryCurrentUser({
+        skipErrorHandler: true,
       });
-    async function loadStrategyWithAutoRun() {
-      try {
-        setBacktestJob(null);
-        const detail = await api.stockStrategies(current.code);
-        if (cancelled) return;
-        setStockStrategies(detail);
-        const missingStrategy = !technicalKeys.every((key) => detail.summary.some((item) => item.strategy === key));
-        if (detail.status !== "not_in_latest_backtest" && !missingStrategy) return;
-        const job = await api.runStockBacktest(current.code);
-        if (cancelled) return;
-        setBacktestJob(job);
-        if (["ready", "done"].includes(job.status)) {
-          setStockStrategies(await api.stockStrategies(current.code));
-          return;
-        }
-        for (let attempt = 0; attempt < 20; attempt += 1) {
-          await sleep(3000);
-          if (cancelled) return;
-          const next = await api.stockStrategies(current.code);
-          setStockStrategies(next);
-          if (next.status === "ok") {
-            setBacktestJob({ code: current.code, status: "done", message: "单股策略回测已完成。" });
-            return;
-          }
-          const nextJob = await api.runStockBacktest(current.code);
-          setBacktestJob(nextJob);
-          if (nextJob.status === "failed") return;
-        }
-      } catch (err) {
-        if (!cancelled) setError(err instanceof Error ? err.message : "策略验证加载失败");
-      }
+      return msg.data;
+    } catch (_error) {
+      const { pathname, search, hash } = history.location;
+      history.replace(
+        `${loginPath}?redirect=${encodeURIComponent(pathname + search + hash)}`,
+      );
     }
-    loadStrategyWithAutoRun();
-    return () => {
-      cancelled = true;
+    return undefined;
+  };
+  // 如果不是登录页面，执行
+  const { location } = history;
+  if (
+    ![loginPath, '/user/register', '/user/register-result'].includes(
+      location.pathname,
+    )
+  ) {
+    const currentUser = await fetchUserInfo();
+    return {
+      fetchUserInfo,
+      currentUser,
+      settings: defaultSettings as Partial<LayoutSettings>,
+      settingDrawerOpen: false,
     };
-  }, [selected]);
-
-  const filteredCandidates = useMemo(() => {
-    if (groupFilter === "全部") return candidates;
-    return candidates.filter((item) => item.group === groupFilter);
-  }, [candidates, groupFilter]);
-
-  return (
-    <AppShell page={page} error={error} loading={loading} onPageChange={setPage} onRefresh={loadCore}>
-      {page === "home" && (
-        <HomePage
-          health={health}
-          overview={overview}
-          candidates={candidates}
-          learning={learning}
-          concentration={concentration}
-          reviewNotes={reviewNotes}
-          openStock={(candidate) => {
-            setSelected(candidate);
-            setPage("stock");
-          }}
-        />
-      )}
-      {page === "screen" && (
-        <ScreenPage
-          candidates={filteredCandidates}
-          concentration={concentration}
-          groupFilter={groupFilter}
-          setGroupFilter={setGroupFilter}
-          selected={selected}
-          setSelected={setSelected}
-          openStock={(candidate) => {
-            setSelected(candidate);
-            setPage("stock");
-          }}
-        />
-      )}
-      {page === "stock" && (
-        <StockPage
-          selected={selected}
-          agentBrief={agentBrief}
-          agentBriefLoading={agentBriefLoading}
-          indicators={indicators}
-          patterns={patterns}
-          matchedStrategies={matchedStrategies}
-          strategyDetail={stockStrategies}
-          backtestJob={backtestJob}
-          reviewNote={selected ? reviewNotes[selected.code] : undefined}
-          onSaveReview={saveReviewNote}
-        />
-      )}
-      {page === "strategy" && <StrategyPage strategies={strategies} selected={selected} matchedStrategies={matchedStrategies} />}
-      {page === "concentration" && (
-        <ConcentrationPage
-          candidates={candidates}
-          openStock={(candidate) => {
-            setSelected(candidate);
-            setPage("stock");
-          }}
-        />
-      )}
-      {page === "reports" && <ReportsPage reports={reports} />}
-      {page === "history" && <HistoryReportsPage reports={reports} />}
-      {page === "learning" && <LearningPage learning={learning} />}
-      {page === "data" && <DataPage health={health} overview={overview} />}
-    </AppShell>
-  );
+  }
+  return {
+    fetchUserInfo,
+    settings: defaultSettings as Partial<LayoutSettings>,
+    settingDrawerOpen: false,
+  };
 }
 
-function strategyQueryForCandidate(candidate: Candidate): string {
-  return [
-    candidate.group,
-    candidate.action_hint,
-    candidate.macd_status,
-    candidate.kdj_status,
-    candidate.rsi14 !== null && candidate.rsi14 !== undefined ? `RSI${candidate.rsi14.toFixed(1)}` : "",
-    ...(candidate.reasons ?? []),
-    ...(candidate.risks ?? [])
-  ].filter(Boolean).join(" ");
+// ProLayout 支持的api https://procomponents.ant.design/components/layout
+export const layout: RunTimeLayoutConfig = ({
+  initialState,
+  setInitialState,
+}) => {
+  return {
+    menuItemRender: (item, dom) => {
+      if (item.path) {
+        return (
+          <Link to={item.path} prefetch>
+            {dom}
+          </Link>
+        );
+      }
+      return dom;
+    },
+    actionsRender: () => {
+      // `locale: false` opts out of the language switcher. ProLayout's own
+      // `locale` prop is a locale string, so narrow to the boolean toggle here.
+      const localeEnabled =
+        (initialState?.settings as { locale?: boolean })?.locale !== false;
+      return [
+        <DocLink key="doc" />,
+        <VersionDropdown key="version" />,
+        localeEnabled && <LangDropdown key="lang" />,
+      ].filter(Boolean);
+    },
+    avatarProps: {
+      src: initialState?.currentUser?.avatar,
+      title: initialState?.currentUser?.name ?? 'X-Growth',
+      render: (_, avatarChildren) => (
+        <AvatarDropdown>{avatarChildren}</AvatarDropdown>
+      ),
+    },
+    // waterMarkProps: {
+    //   content: initialState?.currentUser?.name,
+    // },
+    footerRender: () => <Footer />,
+    onPageChange: () => {
+      const { location } = history;
+      // 如果没有登录，重定向到 login
+      if (!initialState?.currentUser && location.pathname !== loginPath) {
+        history.replace(
+          `${loginPath}?redirect=${encodeURIComponent(location.pathname + location.search + location.hash)}`,
+        );
+      }
+    },
+    bgLayoutImgList: [
+      {
+        src: 'https://mdn.alipayobjects.com/yuyan_qk0oxh/afts/img/D2LWSqNny4sAAAAAAAAAAAAAFl94AQBr',
+        left: 85,
+        bottom: 100,
+        height: '303px',
+      },
+      {
+        src: 'https://mdn.alipayobjects.com/yuyan_qk0oxh/afts/img/C2TWRpJpiC0AAAAAAAAAAAAAFl94AQBr',
+        bottom: -68,
+        right: -45,
+        height: '303px',
+      },
+      {
+        src: 'https://mdn.alipayobjects.com/yuyan_qk0oxh/afts/img/F6vSTbj8KpYAAAAAAAAAAAAAFl94AQBr',
+        bottom: 0,
+        left: 0,
+        width: '331px',
+      },
+    ],
+    links: isDev
+      ? [
+          <Link key="openapi" to="/umi/plugin/openapi" target="_blank">
+            <LinkOutlined />
+            <span>OpenAPI 文档</span>
+          </Link>,
+        ]
+      : [],
+    // Replace ProLayout's default ErrorBoundary with our offline-aware version,
+    // so chunk load errors show friendly messages instead of "Something went wrong."
+    ErrorBoundary,
+    menuHeaderRender: undefined,
+    // 自定义 403 页面
+    // unAccessible: <div>unAccessible</div>,
+    // 增加一个 loading 的状态
+    childrenRender: (children) => {
+      // if (initialState?.loading) return <PageLoading />;
+      return (
+        <>
+          {children}
+          <SettingDrawer
+            disableUrlParams
+            enableDarkTheme
+            collapse={initialState?.settingDrawerOpen}
+            onCollapseChange={(open) => {
+              setInitialState((s) => ({
+                ...s,
+                settingDrawerOpen: open,
+              }));
+            }}
+            settings={initialState?.settings}
+            onSettingChange={(settings) => {
+              setInitialState((s) => ({
+                ...s,
+                settings,
+              }));
+            }}
+          />
+        </>
+      );
+    },
+    ...initialState?.settings,
+  };
+};
+
+/**
+ * @name request 配置，可以配置错误处理
+ * 它基于 axios 提供了一套统一的网络请求和错误处理方案。
+ * @doc https://umijs.org/docs/max/request#配置
+ */
+export const request: RequestConfig = {
+  baseURL: '',
+  ...errorConfig,
+};
+
+export function rootContainer(container: React.ReactNode) {
+  return (
+    <>
+      <OfflineBanner />
+      <ErrorBoundary>{container}</ErrorBoundary>
+    </>
+  );
 }

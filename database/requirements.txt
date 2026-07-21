@@ -1,0 +1,3 @@
+# database/ 定时任务脚本依赖（独立于 backend）
+# 安装: python -m venv .venv && .venv/bin/pip install -r requirements.txt
+baostock>=0.9.1

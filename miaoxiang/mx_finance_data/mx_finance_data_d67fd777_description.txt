@@ -1,0 +1,8 @@
+金融数据查询结果说明
+========================================
+查询内容: 查询2026-07-08 A股市场上涨家数、下跌家数、涨停家数、跌停家数、两市成交额
+数据文件路径: /Users/hao/github/x-growth-ai/miaoxiang/mx_finance_data/mx_finance_data_d67fd777.xlsx
+描述文件路径: /Users/hao/github/x-growth-ai/miaoxiang/mx_finance_data/mx_finance_data_d67fd777_description.txt
+数据行数: 5
+表数量: 2
+Sheet 列表: 全部A股的下跌家数、成交额(合计)等, 全部A股的跌停家数、涨停家数
