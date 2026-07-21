@@ -11,3 +11,5 @@ frontend/node_modules/
 frontend/dist/
 backend/config/agent_model.json
 __pycache__/
+database/*.db
+database/*.log
