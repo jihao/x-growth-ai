@@ -1,12 +1,21 @@
 FROM python:3.12-slim-bookworm
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
-
-RUN apt-get update \
+# 国内构建加速：腾讯云 Debian apt + PyPI（避免拉取 ghcr.io/astral-sh/uv）
+RUN sed -i 's/deb.debian.org/mirrors.cloud.tencent.com/g' /etc/apt/sources.list.d/debian.sources \
+    && sed -i 's/security.debian.org/mirrors.cloud.tencent.com/g' /etc/apt/sources.list.d/debian.sources \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
         libfreetype6 \
         libpng16-16 \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && pip install --no-cache-dir \
+        -i https://mirrors.cloud.tencent.com/pypi/simple/ \
+        --trusted-host mirrors.cloud.tencent.com \
+        uv
+
+# uv sync 走腾讯云 PyPI
+ENV UV_DEFAULT_INDEX=https://mirrors.cloud.tencent.com/pypi/simple/
+ENV UV_NATIVE_TLS=1
 
 WORKDIR /app
 

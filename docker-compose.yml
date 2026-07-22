@@ -1,5 +1,6 @@
 services:
   backend:
+    image: x-growth-ai-backend:latest
     build:
       context: .
       dockerfile: backend/Dockerfile
